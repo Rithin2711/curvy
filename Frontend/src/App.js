@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import EquationInput from './components/EquationInput';
-import GraphPlot from './components/GraphPlot';
+
 import GameCanvas from './components/GameCanvas';
 import Leaderboard from './components/Leaderboard';
 import { createApi } from './services/api';
@@ -198,7 +198,6 @@ function App() {
                 className="panels"
                 style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}
               >
-                <GraphPlot expression={equation} />
                 <GameCanvas
                   key={resetSeed}
                   expression={equation}

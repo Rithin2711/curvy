@@ -6,12 +6,11 @@ const math = create(all, {});
 // PUBLIC_INTERFACE
 export default function GameCanvas({ expression, paused, onStarStats, onComplete }) {
   /**
-   * Desmos-style gameplay:
-   * - We sample y=f(x) in world-space x in [-W/2, W/2], map to canvas.
-   * - Ball starts at the topmost point (smallest canvas y) on the curve.
-   * - Ball slides along the curve only. Gravity projects along tangent for motion.
-   * - Stars are fixed at static canvas coordinates below the top, and collected
-   *   when the ball's current curve point is within radius.
+   * Unified graph + gameplay canvas:
+   * - Plots y = f(x) and overlays the moving player ball and stationary stars.
+   * - Single canvas ensures no duplication of the graph.
+   * - Player ball: cyan filled circle with white outline and glow.
+   * - Stars: yellow five-point star shapes; greyed with outline when collected.
    */
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
@@ -29,7 +28,6 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
   const [curve, setCurve] = useState({ points: [], xToPx: () => 0, yToPx: () => 0 });
   const [state, setState] = useState({
     idx: 0,    // current index along curve polyline
-    dir: 1,    // 1 forward, -1 backward (should go towards increasing y generally)
     speed: 0,  // scalar speed along curve (px/s)
   });
   const starsRef = useRef([]);
@@ -74,7 +72,7 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
             samples.push({ x, y, px: xToPx(x), py: yToPx(y) });
           }
         } catch {
-          // skip
+          // skip invalid points
         }
       }
     }
@@ -90,16 +88,16 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
     }
 
     setCurve({ points: samples, xToPx, yToPx });
-    setState({ idx: startIdx, dir: 1, speed: 0 });
+    setState({ idx: startIdx, speed: 0 });
 
-    // Stars: fixed canvas coordinates below (deterministic)
-    const starR = 10;
+    // Stars: deterministic positions relative to canvas size
+    const starR = 12;
     const positions = [
-      { x: w * 0.25, y: h * 0.35 },
-      { x: w * 0.50, y: h * 0.45 },
-      { x: w * 0.75, y: h * 0.55 },
-      { x: w * 0.35, y: h * 0.65 },
-      { x: w * 0.65, y: h * 0.75 },
+      { x: w * 0.22, y: h * 0.35 },
+      { x: w * 0.50, y: h * 0.46 },
+      { x: w * 0.78, y: h * 0.58 },
+      { x: w * 0.34, y: h * 0.68 },
+      { x: w * 0.66, y: h * 0.78 },
     ];
     starsRef.current = positions.map((p, i) => ({ ...p, r: starR, id: i }));
     collectedRef.current = new Array(positions.length).fill(false);
@@ -107,7 +105,41 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compiled, dimensions.h, dimensions.w, expression]);
 
-  // Physics step: slide along curve
+  // Helper to draw a five-pointed star
+  function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius, fill, stroke, collected) {
+    let rot = Math.PI / 2 * 3;
+    let x = cx;
+    let y = cy;
+    const step = Math.PI / spikes;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - outerRadius);
+    for (let i = 0; i < spikes; i++) {
+      x = cx + Math.cos(rot) * outerRadius;
+      y = cy + Math.sin(rot) * outerRadius;
+      ctx.lineTo(x, y);
+      rot += step;
+
+      x = cx + Math.cos(rot) * innerRadius;
+      y = cy + Math.sin(rot) * innerRadius;
+      ctx.lineTo(x, y);
+      rot += step;
+    }
+    ctx.lineTo(cx, cy - outerRadius);
+    ctx.closePath();
+
+    ctx.fillStyle = collected ? 'rgba(255, 255, 255, 0.2)' : fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = collected ? 'transparent' : '#FFEB99';
+    ctx.shadowBlur = collected ? 0 : 6;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Physics/Render loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -120,21 +152,18 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
     canvas.height = h;
 
     const g = 800; // px/s^2 gravity (downwards +y in canvas)
-    const maxSpeed = 500; // px/s
+    const maxSpeed = 550; // px/s
     const friction = 0.08; // proportional damping along tangent
 
-    function draw() {
-      // Clear
-      ctx.clearRect(0, 0, w, h);
-
-      // Background gradient (subtle)
+    function drawAxesAndGrid() {
+      // Background
       const grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, '#111');
-      grad.addColorStop(1, '#333');
+      grad.addColorStop(0, '#0f1220');
+      grad.addColorStop(1, '#111827');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Grid-like feel (optional faint)
+      // Grid
       ctx.strokeStyle = 'rgba(255,255,255,0.06)';
       ctx.lineWidth = 1;
       for (let y = 0; y <= h; y += 40) {
@@ -150,7 +179,23 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
         ctx.stroke();
       }
 
-      // Draw curve
+      // Axes (centered)
+      ctx.strokeStyle = 'rgba(97,218,251,0.6)';
+      ctx.lineWidth = 1.5;
+      // x-axis
+      ctx.beginPath();
+      ctx.moveTo(0, h / 2);
+      ctx.lineTo(w, h / 2);
+      ctx.stroke();
+      // y-axis
+      ctx.beginPath();
+      ctx.moveTo(w / 2, 0);
+      ctx.lineTo(w / 2, h);
+      ctx.stroke();
+    }
+
+    function drawCurve() {
+      if (curve.points.length < 2) return;
       ctx.strokeStyle = '#61dafb';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -159,39 +204,79 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
         else ctx.lineTo(p.px, p.py);
       });
       ctx.stroke();
+    }
 
-      // Draw stars
+    function drawStars() {
       starsRef.current.forEach((s, i) => {
         const collected = collectedRef.current[i];
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-        ctx.fillStyle = collected ? 'rgba(255,255,255,0.15)' : '#ffd166';
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1.5;
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
+        drawStar(ctx, s.x, s.y, 5, s.r, s.r * 0.5, '#ffd166', '#ffffff', collected);
       });
+    }
 
-      // Draw ball
+    function drawBall() {
       const p = curve.points[state.idx];
-      if (p) {
-        ctx.beginPath();
-        ctx.arc(p.px, p.py, 12, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffcc00';
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.fill();
-        ctx.stroke();
-      }
+      if (!p) return;
+      ctx.save();
+      // Glow
+      ctx.shadowColor = '#7ee0ff';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(p.px, p.py, 12, 0, Math.PI * 2);
+      ctx.fillStyle = '#22d3ee'; // cyan
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawLegend() {
+      const pad = 10;
+      ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+      ctx.fillStyle = '#cbd5e1';
+      const label = `y = ${expression}`;
+      ctx.fillText(label, pad, 18);
+
+      // Legend icons
+      // Curve
+      ctx.strokeStyle = '#61dafb';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(pad, 30);
+      ctx.lineTo(pad + 18, 30);
+      ctx.stroke();
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText('Curve', pad + 24, 34);
+
+      // Ball
+      ctx.beginPath();
+      ctx.fillStyle = '#22d3ee';
+      ctx.strokeStyle = '#fff';
+      ctx.arc(pad + 6, 48, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText('Player', pad + 24, 52);
+
+      // Star
+      drawStar(ctx, pad + 6, 68, 5, 6, 3, '#ffd166', '#fff', false);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText('Star', pad + 24, 72);
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, w, h);
+      drawAxesAndGrid();
+      drawCurve();
+      drawStars();
+      drawBall();
+      drawLegend();
     }
 
     function step(dt) {
       if (paused) return;
-
       if (curve.points.length < 2) return;
-      let { idx, dir, speed } = state;
+      let { idx, speed } = state;
 
       // Local tangent using adjacent sample
       const i0 = Math.max(0, Math.min(curve.points.length - 2, idx));
@@ -206,55 +291,45 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
       const ux = tx / len;
       const uy = ty / len;
 
-      // Gravity vector in canvas: (0, +g). Project onto tangent to get acceleration along path:
+      // Gravity projection onto tangent (canvas gravity is +y)
       const ax = 0, ay = g;
-      const a_tan = ax * ux + ay * uy; // scalar acceleration along tangent direction
-      // Adjust speed; apply simple friction
+      const a_tan = ax * ux + ay * uy;
+      // Integrate speed with friction
       speed += a_tan * dt;
-      const sign = Math.sign(speed) || 1;
       const frictionForce = -friction * speed;
       speed += frictionForce * dt;
-      // clamp
-      if (speed > maxSpeed) speed = maxSpeed;
-      if (speed < -maxSpeed) speed = -maxSpeed;
+      // Clamp
+      speed = Math.max(-maxSpeed, Math.min(maxSpeed, speed));
 
-      // Advance along the polyline by distance = |speed| * dt
+      // Move along polyline
       let travel = Math.abs(speed * dt);
       let currentIdx = i0;
-      let remaining = travel;
-      let forward = speed >= 0 ? 1 : -1;
+      const forward = speed >= 0 ? 1 : -1;
 
-      let curPoint = curve.points[currentIdx];
-      while (remaining > 0 && currentIdx >= 0 && currentIdx < curve.points.length - 1) {
+      while (travel > 0 && currentIdx >= 0 && currentIdx < curve.points.length - 1) {
         const P = curve.points[currentIdx];
         const Q = curve.points[currentIdx + 1];
         const segLen = Math.hypot(Q.px - P.px, Q.py - P.py);
-        if (segLen <= remaining) {
-          remaining -= segLen;
+        if (segLen <= travel) {
+          travel -= segLen;
           currentIdx += forward;
-          curPoint = curve.points[Math.max(0, Math.min(curve.points.length - 1, currentIdx))];
-          // Bounds: stop at end
           if (currentIdx <= 0 || currentIdx >= curve.points.length - 1) {
             speed = 0;
             break;
           }
         } else {
-          // stay within this segment, progress fractionally
-          const frac = remaining / segLen;
-          // For rendering we keep discrete idx; approximate by moving to nearer vertex
+          // partial progress: snap if over halfway to reduce jitter
+          const frac = travel / segLen;
           if (frac > 0.5 && currentIdx + forward >= 0 && currentIdx + forward < curve.points.length) {
             currentIdx += forward;
           }
-          remaining = 0;
+          travel = 0;
         }
       }
 
-      // Ensure movement direction follows increasing canvas y overall (downwards)
-      // If we are at the topmost area, speed will initially be ~0 and then accelerate
       idx = Math.max(0, Math.min(curve.points.length - 1, currentIdx));
-      dir = forward;
 
-      // Check star collisions
+      // Collisions with stars
       const cp = curve.points[idx];
       if (cp) {
         const bx = cp.px, by = cp.py;
@@ -264,7 +339,7 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
             const d = Math.hypot(bx - s.x, by - s.y);
             if (d <= s.r + 12) {
               collectedRef.current[i] = true;
-              newly += 1;
+              newly++;
             }
           }
         });
@@ -272,12 +347,12 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
           const c = collectedRef.current.filter(Boolean).length;
           onStarStats({ collected: c, total: collectedRef.current.length });
           if (c === collectedRef.current.length) {
-            onComplete && onComplete(Math.round(1000 - (by || 0)));
+            onComplete && onComplete(Math.max(0, Math.round(1000 - by)));
           }
         }
       }
 
-      setState({ idx, dir, speed });
+      setState({ idx, speed });
     }
 
     function raf(ts) {
@@ -294,14 +369,12 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
     return () => {
       cancelAnimationFrame(animationRef.current);
     };
-  }, [curve.points, dimensions.h, dimensions.w, onComplete, onStarStats, paused, state]);
+  }, [curve.points, dimensions.h, dimensions.w, expression, onComplete, onStarStats, paused, state]);
 
-  // Redraw stars/curve when pause toggles too (to avoid stale frame)
   useEffect(() => {
     lastTsRef.current = 0;
   }, [paused]);
 
-  // initialize HUD stats (in case)
   useEffect(() => {
     onStarStats({
       collected: (collectedRef.current || []).filter(Boolean).length,
@@ -311,17 +384,17 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
 
   return (
     <div className="game-panel">
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>Game</div>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>Graph + Game</div>
       <div ref={containerRef} style={{ width: '100%' }}>
         <canvas
           ref={canvasRef}
           className="game-canvas"
           role="application"
-          aria-label="Gravity Curve Game Canvas"
+          aria-label="Unified Graph and Game Canvas"
         />
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-        Tip: The ball starts at the topmost point of y = f(x) and slides along the curve. Adjust the equation to collect all stars!
+        Tip: The ball starts at the highest point of y = f(x) and slides along. Adjust the equation to collect all stars!
       </div>
     </div>
   );
