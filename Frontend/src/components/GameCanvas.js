@@ -1,29 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import Matter from 'matter-js';
 import { create, all } from 'mathjs';
 
 const math = create(all, {});
 
-/**
- * PUBLIC_INTERFACE
- */
+// PUBLIC_INTERFACE
 export default function GameCanvas({ expression, paused, onStarStats, onComplete }) {
   /**
-   * Game world:
-   * - Width responsive to container; Height 420px default
-   * - A ball starts near top center
-   * - Stars are static circles; collecting occurs when ball overlaps
-   * - Guidance by curve: compute target y=f(x) and apply a small lateral force that tries to move the ball toward curve
-   * - Gravity is enabled
-   * - Pause/Resume controlled by parent
+   * Desmos-style gameplay:
+   * - We sample y=f(x) in world-space x in [-W/2, W/2], map to canvas.
+   * - Ball starts at the topmost point (smallest canvas y) on the curve.
+   * - Ball slides along the curve only. Gravity projects along tangent for motion.
+   * - Stars are fixed at static canvas coordinates below the top, and collected
+   *   when the ball's current curve point is within radius.
    */
   const containerRef = useRef(null);
-  const engineRef = useRef(null);
-  const renderRef = useRef(null);
-  const runnerRef = useRef(null);
-  const ballRef = useRef(null);
-  const starBodiesRef = useRef([]);
-  const starStatesRef = useRef([]);
+  const canvasRef = useRef(null);
+  const [dimensions, setDimensions] = useState({ w: 800, h: 420 });
+
+  // Simulation state
   const compiled = useMemo(() => {
     try {
       return math.compile(expression);
@@ -32,9 +26,18 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
     }
   }, [expression]);
 
-  const [dimensions, setDimensions] = useState({ w: 800, h: 420 });
+  const [curve, setCurve] = useState({ points: [], xToPx: () => 0, yToPx: () => 0 });
+  const [state, setState] = useState({
+    idx: 0,    // current index along curve polyline
+    dir: 1,    // 1 forward, -1 backward (should go towards increasing y generally)
+    speed: 0,  // scalar speed along curve (px/s)
+  });
+  const starsRef = useRef([]);
+  const collectedRef = useRef([]);
+  const animationRef = useRef(0);
+  const lastTsRef = useRef(0);
 
-  // Responsive width
+  // responsive width
   useEffect(() => {
     const el = containerRef.current;
     const calc = () => {
@@ -49,196 +52,276 @@ export default function GameCanvas({ expression, paused, onStarStats, onComplete
     return () => ro.disconnect();
   }, []);
 
-  // Initialize Matter world
+  // Build curve samples and reset ball at topmost point
   useEffect(() => {
-    const { Engine, Render, Runner, World, Bodies, Events, Body } = Matter;
-    const engine = Engine.create();
-    engine.gravity.y = 1; // gravity
-    engineRef.current = engine;
-
     const w = dimensions.w;
     const h = dimensions.h;
 
-    const render = Render.create({
-      element: containerRef.current,
-      engine,
-      options: {
-        width: w,
-        height: h,
-        wireframes: false,
-        background: 'transparent',
-      },
-    });
-    renderRef.current = render;
+    const xMin = -w / 2;
+    const xMax = w / 2;
+    const samples = [];
+    const step = 2; // px per sample in world x
 
-    const runner = Runner.create();
-    runnerRef.current = runner;
+    const xToPx = (x) => x + w / 2;
+    // World y positive up -> Canvas y positive down; center at h/2:
+    const yToPx = (y) => h / 2 - y;
 
-    // Walls
-    const thickness = 40;
-    const walls = [
-      Bodies.rectangle(w / 2, -thickness / 2, w, thickness, { isStatic: true }), // ceiling
-      Bodies.rectangle(w / 2, h + thickness / 2, w, thickness, { isStatic: true }), // floor
-      Bodies.rectangle(-thickness / 2, h / 2, thickness, h, { isStatic: true }), // left
-      Bodies.rectangle(w + thickness / 2, h / 2, thickness, h, { isStatic: true }), // right
-    ];
-
-    // Ball
-    const ball = Bodies.circle(w / 2, 40, 12, {
-      restitution: 0.05,
-      friction: 0.02,
-      frictionAir: 0.005,
-      render: {
-        fillStyle: '#ffcc00',
-        strokeStyle: '#ffffff',
-        lineWidth: 2,
-      },
-    });
-    ballRef.current = ball;
-
-    // Stars: generate fixed number with some margins
-    const starCount = 5;
-    const margin = 40;
-    const stars = [];
-    const starStates = [];
-    for (let i = 0; i < starCount; i++) {
-      const sx = margin + Math.random() * (w - 2 * margin);
-      const sy = margin + 100 + Math.random() * (h - 2 * margin - 100);
-      const star = Bodies.circle(sx, sy, 8, {
-        isStatic: true,
-        isSensor: true, // so ball can overlap
-        render: {
-          fillStyle: '#61dafb',
-          strokeStyle: '#ffffff',
-          lineWidth: 1.5,
-        },
-        label: `star-${i}`,
-      });
-      stars.push(star);
-      starStates.push({ id: i, collected: false });
+    if (compiled) {
+      for (let x = xMin; x <= xMax; x += step) {
+        try {
+          const y = compiled.evaluate({ x });
+          if (isFinite(y)) {
+            samples.push({ x, y, px: xToPx(x), py: yToPx(y) });
+          }
+        } catch {
+          // skip
+        }
+      }
     }
-    starBodiesRef.current = stars;
-    starStatesRef.current = starStates;
 
-    World.add(engine.world, [...walls, ball, ...stars]);
+    // Find topmost point (minimum canvas py)
+    let startIdx = 0;
+    let minPy = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < samples.length; i++) {
+      if (samples[i].py < minPy) {
+        minPy = samples[i].py;
+        startIdx = i;
+      }
+    }
 
-    // Collision handling for star collection
-    Events.on(engine, 'collisionStart', (event) => {
-      for (let pair of event.pairs) {
-        const bodies = [pair.bodyA, pair.bodyB];
-        bodies.forEach((b) => {
-          if (b.label && b.label.startsWith('star-')) {
-            const idx = parseInt(b.label.split('-')[1], 10);
-            if (!starStatesRef.current[idx].collected) {
-              starStatesRef.current[idx].collected = true;
-              // visually hide star
-              b.render.fillStyle = 'rgba(255,255,255,0.2)';
-              b.isSensor = true;
-              b.collisionFilter = { group: -1, category: 0, mask: 0 };
-              // update stats
-              const collected = starStatesRef.current.filter((s) => s.collected).length;
-              onStarStats({ collected, total: starStatesRef.current.length });
-              if (collected === starStatesRef.current.length) {
-                // Completed!
-                onComplete && onComplete(1000 - Math.max(0, ball.position.y)); // naive score
-              }
+    setCurve({ points: samples, xToPx, yToPx });
+    setState({ idx: startIdx, dir: 1, speed: 0 });
+
+    // Stars: fixed canvas coordinates below (deterministic)
+    const starR = 10;
+    const positions = [
+      { x: w * 0.25, y: h * 0.35 },
+      { x: w * 0.50, y: h * 0.45 },
+      { x: w * 0.75, y: h * 0.55 },
+      { x: w * 0.35, y: h * 0.65 },
+      { x: w * 0.65, y: h * 0.75 },
+    ];
+    starsRef.current = positions.map((p, i) => ({ ...p, r: starR, id: i }));
+    collectedRef.current = new Array(positions.length).fill(false);
+    onStarStats({ collected: 0, total: positions.length });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compiled, dimensions.h, dimensions.w, expression]);
+
+  // Physics step: slide along curve
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const w = dimensions.w;
+    const h = dimensions.h;
+
+    canvas.width = w;
+    canvas.height = h;
+
+    const g = 800; // px/s^2 gravity (downwards +y in canvas)
+    const maxSpeed = 500; // px/s
+    const friction = 0.08; // proportional damping along tangent
+
+    function draw() {
+      // Clear
+      ctx.clearRect(0, 0, w, h);
+
+      // Background gradient (subtle)
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, '#111');
+      grad.addColorStop(1, '#333');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      // Grid-like feel (optional faint)
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+      ctx.lineWidth = 1;
+      for (let y = 0; y <= h; y += 40) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      for (let x = 0; x <= w; x += 50) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+
+      // Draw curve
+      ctx.strokeStyle = '#61dafb';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      curve.points.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p.px, p.py);
+        else ctx.lineTo(p.px, p.py);
+      });
+      ctx.stroke();
+
+      // Draw stars
+      starsRef.current.forEach((s, i) => {
+        const collected = collectedRef.current[i];
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = collected ? 'rgba(255,255,255,0.15)' : '#ffd166';
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      });
+
+      // Draw ball
+      const p = curve.points[state.idx];
+      if (p) {
+        ctx.beginPath();
+        ctx.arc(p.px, p.py, 12, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffcc00';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    function step(dt) {
+      if (paused) return;
+
+      if (curve.points.length < 2) return;
+      let { idx, dir, speed } = state;
+
+      // Local tangent using adjacent sample
+      const i0 = Math.max(0, Math.min(curve.points.length - 2, idx));
+      const i1 = i0 + 1;
+      const A = curve.points[i0];
+      const B = curve.points[i1];
+      if (!A || !B) return;
+
+      const tx = B.px - A.px;
+      const ty = B.py - A.py;
+      const len = Math.hypot(tx, ty) || 1;
+      const ux = tx / len;
+      const uy = ty / len;
+
+      // Gravity vector in canvas: (0, +g). Project onto tangent to get acceleration along path:
+      const ax = 0, ay = g;
+      const a_tan = ax * ux + ay * uy; // scalar acceleration along tangent direction
+      // Adjust speed; apply simple friction
+      speed += a_tan * dt;
+      const sign = Math.sign(speed) || 1;
+      const frictionForce = -friction * speed;
+      speed += frictionForce * dt;
+      // clamp
+      if (speed > maxSpeed) speed = maxSpeed;
+      if (speed < -maxSpeed) speed = -maxSpeed;
+
+      // Advance along the polyline by distance = |speed| * dt
+      let travel = Math.abs(speed * dt);
+      let currentIdx = i0;
+      let remaining = travel;
+      let forward = speed >= 0 ? 1 : -1;
+
+      let curPoint = curve.points[currentIdx];
+      while (remaining > 0 && currentIdx >= 0 && currentIdx < curve.points.length - 1) {
+        const P = curve.points[currentIdx];
+        const Q = curve.points[currentIdx + 1];
+        const segLen = Math.hypot(Q.px - P.px, Q.py - P.py);
+        if (segLen <= remaining) {
+          remaining -= segLen;
+          currentIdx += forward;
+          curPoint = curve.points[Math.max(0, Math.min(curve.points.length - 1, currentIdx))];
+          // Bounds: stop at end
+          if (currentIdx <= 0 || currentIdx >= curve.points.length - 1) {
+            speed = 0;
+            break;
+          }
+        } else {
+          // stay within this segment, progress fractionally
+          const frac = remaining / segLen;
+          // For rendering we keep discrete idx; approximate by moving to nearer vertex
+          if (frac > 0.5 && currentIdx + forward >= 0 && currentIdx + forward < curve.points.length) {
+            currentIdx += forward;
+          }
+          remaining = 0;
+        }
+      }
+
+      // Ensure movement direction follows increasing canvas y overall (downwards)
+      // If we are at the topmost area, speed will initially be ~0 and then accelerate
+      idx = Math.max(0, Math.min(curve.points.length - 1, currentIdx));
+      dir = forward;
+
+      // Check star collisions
+      const cp = curve.points[idx];
+      if (cp) {
+        const bx = cp.px, by = cp.py;
+        let newly = 0;
+        starsRef.current.forEach((s, i) => {
+          if (!collectedRef.current[i]) {
+            const d = Math.hypot(bx - s.x, by - s.y);
+            if (d <= s.r + 12) {
+              collectedRef.current[i] = true;
+              newly += 1;
             }
           }
         });
+        if (newly > 0) {
+          const c = collectedRef.current.filter(Boolean).length;
+          onStarStats({ collected: c, total: collectedRef.current.length });
+          if (c === collectedRef.current.length) {
+            onComplete && onComplete(Math.round(1000 - (by || 0)));
+          }
+        }
       }
-    });
 
-    Render.run(render);
-    Runner.run(runner, engine);
+      setState({ idx, dir, speed });
+    }
 
+    function raf(ts) {
+      if (!lastTsRef.current) lastTsRef.current = ts;
+      const dt = Math.min(0.05, (ts - lastTsRef.current) / 1000);
+      lastTsRef.current = ts;
+
+      step(dt);
+      draw();
+      animationRef.current = requestAnimationFrame(raf);
+    }
+
+    animationRef.current = requestAnimationFrame(raf);
     return () => {
-      Render.stop(render);
-      Runner.stop(runner);
-      World.clear(engine.world, false);
-      Engine.clear(engine);
-      if (render.canvas) {
-        render.canvas.remove();
-      }
-      render.textures = {};
+      cancelAnimationFrame(animationRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dimensions.w]); // reinit on width change or mount
+  }, [curve.points, dimensions.h, dimensions.w, onComplete, onStarStats, paused, state]);
 
-  // Pause/Resume
+  // Redraw stars/curve when pause toggles too (to avoid stale frame)
   useEffect(() => {
-    const runner = runnerRef.current;
-    if (!runner) return;
-    runner.enabled = !paused;
+    lastTsRef.current = 0;
   }, [paused]);
 
-  // Curve-following guidance
+  // initialize HUD stats (in case)
   useEffect(() => {
-    const { Events, Body } = Matter;
-    const engine = engineRef.current;
-    const ball = ballRef.current;
-    if (!engine || !ball) return;
-
-    const forceScale = 0.0008; // adjust lateral correction
-    const handler = () => {
-      // Compute target y=f(x) in game coordinates
-      const x = ball.position.x - (dimensions.w / 2); // center x=0 at middle for function input
-      let targetY = null;
-      if (compiled) {
-        try {
-          const y = compiled.evaluate({ x });
-          if (isFinite(y)) targetY = y;
-        } catch {
-          targetY = null;
-        }
-      }
-      if (targetY === null) return;
-
-      // Transform function y to canvas coordinates:
-      // we map f(x) range roughly into canvas space; assume 1 unit = 1 px for simplicity but centered vertically at mid-height
-      const canvasY = dimensions.h / 2 + targetY;
-
-      const dy = canvasY - ball.position.y;
-      // vertical attraction toward curve path (mild)
-      const vyForce = Math.max(Math.min(dy * 0.0003, 0.02), -0.02);
-
-      // lateral steer toward direction of slope: compute next y at x+1 to get slope
-      let slope = 0;
-      if (compiled) {
-        try {
-          const y1 = compiled.evaluate({ x: x + 1 });
-          if (isFinite(y1) && isFinite(targetY)) {
-            slope = y1 - targetY;
-          }
-        } catch {
-          slope = 0;
-        }
-      }
-      const dir = Math.sign(slope);
-      const vxForce = dir * forceScale;
-
-      Body.applyForce(ball, ball.position, { x: vxForce, y: vyForce });
-    };
-
-    const unsubscribe = Matter.Events.on(engine, 'beforeUpdate', handler);
-    return () => {
-      Matter.Events.off(engine, 'beforeUpdate', handler);
-    };
-  }, [compiled, dimensions.h, dimensions.w]);
-
-  useEffect(() => {
-    // initialize HUD stats
     onStarStats({
-      collected: starStatesRef.current.filter((s) => s.collected).length,
-      total: starStatesRef.current.length || 5,
+      collected: (collectedRef.current || []).filter(Boolean).length,
+      total: (collectedRef.current || []).length || 5,
     });
   }, [onStarStats]);
 
   return (
     <div className="game-panel">
       <div style={{ fontWeight: 600, marginBottom: 6 }}>Game</div>
-      <div ref={containerRef} className="game-canvas" role="application" aria-label="Gravity Curve Game Canvas" />
+      <div ref={containerRef} style={{ width: '100%' }}>
+        <canvas
+          ref={canvasRef}
+          className="game-canvas"
+          role="application"
+          aria-label="Gravity Curve Game Canvas"
+        />
+      </div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-        Tip: Pause to change equation, then resume. Try linear, quadratic, or sine curves!
+        Tip: The ball starts at the topmost point of y = f(x) and slides along the curve. Adjust the equation to collect all stars!
       </div>
     </div>
   );
