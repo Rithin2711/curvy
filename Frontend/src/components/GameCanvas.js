@@ -10,6 +10,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
    * - Plots all y = f_i(x) with distinct colors and overlays a single moving ball.
    * - Ball follows the nearest curve segment at its current position (curve-switch allowed).
    * - Stars: yellow five-point star shapes; greyed with outline when collected.
+   * - Path Trace: draws a persistent fading line following the ball's recent trajectory.
    */
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
@@ -39,6 +40,11 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   const collectedRef = useRef([]);
   const animationRef = useRef(0);
   const lastTsRef = useRef(0);
+
+  // Path tracing: store recent positions (world coords) with timestamp
+  const pathRef = useRef([]); // [{x,y,t}]
+  const PATH_MAX_POINTS = 600; // cap list for performance
+  const PATH_FADE_MS = 6000; // older points fade out over N ms
 
   // responsive width
   useEffect(() => {
@@ -121,6 +127,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     setCurves(allCurves);
     setState({ x: startX, y: startY, vx: 0, vy: 0 });
+
+    // Reset path on new curves or resize
+    pathRef.current = [{ x: startX, y: startY, t: performance.now() }];
 
     // Stars: deterministic positions relative to canvas size
     const starR = 12;
@@ -309,6 +318,38 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       ctx.fillText('Star', pad + 24, y + 4);
     }
 
+    function drawPathTrace(nowMs) {
+      if (!pathRef.current || pathRef.current.length < 2) return;
+
+      // Purge old points
+      const cutoff = nowMs - PATH_FADE_MS;
+      while (pathRef.current.length && pathRef.current[0].t < cutoff) {
+        pathRef.current.shift();
+      }
+
+      // Draw a fading polyline
+      ctx.save();
+      ctx.lineWidth = 3;
+
+      // Color slightly different from ball to stand out
+      const baseColor = { r: 124, g: 58, b: 237 }; // violet-ish (#7c3aed)
+      // Draw segments with alpha based on age
+      for (let i = 1; i < pathRef.current.length; i++) {
+        const a = pathRef.current[i - 1];
+        const b = pathRef.current[i];
+        const age = Math.max(0, Math.min(1, (b.t - cutoff) / PATH_FADE_MS)); // 0..1
+        const alpha = 0.15 + 0.55 * age; // keep visible but fade old
+        ctx.strokeStyle = `rgba(${baseColor.r}, ${baseColor.g}, ${baseColor.b}, ${alpha.toFixed(3)})`;
+        const pa = worldToCanvas(a.x, a.y);
+        const pb = worldToCanvas(b.x, b.y);
+        ctx.beginPath();
+        ctx.moveTo(pa.px, pa.py);
+        ctx.lineTo(pb.px, pb.py);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     function nearestPointOnCurves(x, y) {
       // Find nearest sampled point across all curves (points already in-domain)
       let best = null;
@@ -398,6 +439,18 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         }
       }
 
+      // Append to path (world coords)
+      const now = performance.now();
+      const plist = pathRef.current;
+      const last = plist[plist.length - 1];
+      // only push if moved a bit to avoid dense duplicates
+      if (!last || Math.hypot((x - last.x), (y - last.y)) > 0.5) {
+        plist.push({ x, y, t: now });
+        if (plist.length > PATH_MAX_POINTS) {
+          plist.splice(0, plist.length - PATH_MAX_POINTS);
+        }
+      }
+
       setState({ x, y, vx, vy });
     }
 
@@ -405,7 +458,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       ctx.clearRect(0, 0, w, h);
       drawAxesAndGrid();
       drawCurves();
+      // Draw path trace under ball but above curves for clarity
       drawStars();
+      drawPathTrace(performance.now());
       drawBall();
       drawLegend();
     }
@@ -430,6 +485,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     lastTsRef.current = 0;
   }, [paused]);
 
+  // Reset and notify stars on mount
   useEffect(() => {
     onStarStats({
       collected: (collectedRef.current || []).filter(Boolean).length,
@@ -445,7 +501,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
           ref={canvasRef}
           className="game-canvas"
           role="application"
-          aria-label="Unified Graph and Game Canvas"
+          aria-label="Unified Graph and Game Canvas with Path Trace"
         />
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
