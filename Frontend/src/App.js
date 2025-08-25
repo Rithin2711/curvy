@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import './App.css';
 import EquationInput from './components/EquationInput';
 
@@ -11,17 +11,21 @@ function App() {
   /**
    * This is the main Gravity Curve app. It renders:
    * - Theme toggle
-   * - Equation input with validation
-   * - Real-time graph of y=f(x)
-   * - Matter.js-based physics scene for the ball and stars
+   * - Multiple equation input with validation and list management
+   * - Unified canvas for graph + gameplay rendering multiple curves
    * - Pause/Resume/Reset controls and HUD
    * - Leaderboard view
    * It integrates with backend APIs via the services/api module.
    */
   const [theme, setTheme] = useState('light');
-  const [equation, setEquation] = useState('0.5*x'); // default simple slope
+
+  // Multiple equations state: [{ id, expr, color }]
+  const [equations, setEquations] = useState([
+    { id: 1, expr: '0.5*x', color: '#61dafb' },
+  ]);
+
   const [paused, setPaused] = useState(true);
-  const [resetSeed, setResetSeed] = useState(0); // change to reset game
+  const [resetSeed, setResetSeed] = useState(0);
   const [collected, setCollected] = useState(0);
   const [totalStars, setTotalStars] = useState(5);
   const [moves, setMoves] = useState(0);
@@ -47,11 +51,36 @@ function App() {
     };
   }, [api]);
 
-  const onEquationApply = (expr) => {
-    setEquation(expr);
-    // Count as a move if applied during play
+  const colorCycle = ['#61dafb', '#22d3ee', '#f59e0b', '#10b981', '#eab308', '#ef4444', '#8b5cf6', '#ec4899'];
+
+  // PUBLIC_INTERFACE
+  function addEquation(expr = '') {
+    /** Add a new equation row with optional starting expression */
+    const nextId = (equations.at(-1)?.id || 0) + 1;
+    const color = colorCycle[(nextId - 1) % colorCycle.length];
+    setEquations((list) => [...list, { id: nextId, expr, color }]);
+  }
+
+  // PUBLIC_INTERFACE
+  function updateEquation(id, expr) {
+    /** Update an existing equation expression by id */
+    setEquations((list) =>
+      list.map((e) => (e.id === id ? { ...e, expr } : e))
+    );
+  }
+
+  // PUBLIC_INTERFACE
+  function removeEquation(id) {
+    /** Remove an equation from the list */
+    setEquations((list) => list.filter((e) => e.id !== id));
+  }
+
+  // PUBLIC_INTERFACE
+  function applyEquation(id, expr) {
+    /** Apply equation change and count as a move if game is running */
+    updateEquation(id, expr);
     setMoves((m) => (!paused ? m + 1 : m));
-  };
+  }
 
   const onPauseToggle = () => {
     setPaused((p) => !p);
@@ -156,7 +185,70 @@ function App() {
                 </button>
               </div>
 
-              <EquationInput onApply={onEquationApply} initialValue={equation} />
+              {/* Multiple equation inputs */}
+              <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontWeight: 600 }}>Equations y = f(x)</div>
+                  <button
+                    onClick={() => addEquation('')}
+                    className="btn"
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: 'var(--button-bg)',
+                      color: 'var(--button-text)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                    aria-label="Add equation"
+                  >
+                    + Add
+                  </button>
+                </div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {equations.map((eq) => (
+                    <div key={eq.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div
+                        style={{
+                          width: 12,
+                          height: 12,
+                          borderRadius: 2,
+                          background: eq.color,
+                          border: '1px solid rgba(0,0,0,0.1)'
+                        }}
+                        aria-label={`Color for equation ${eq.id}`}
+                        title={eq.color}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <EquationInput
+                          onApply={(expr) => applyEquation(eq.id, expr)}
+                          initialValue={eq.expr}
+                        />
+                      </div>
+                      <button
+                        onClick={() => removeEquation(eq.id)}
+                        aria-label={`Remove equation ${eq.id}`}
+                        title="Remove"
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border-color)',
+                          background: 'transparent',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  {equations.length === 0 && (
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                      No equations. Click "Add" to insert one.
+                    </div>
+                  )}
+                </div>
+              </div>
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button
@@ -200,7 +292,7 @@ function App() {
               >
                 <GameCanvas
                   key={resetSeed}
-                  expression={equation}
+                  expressions={equations} // pass array [{id, expr, color}]
                   paused={paused}
                   onStarStats={onStarStats}
                   onComplete={onGameComplete}
