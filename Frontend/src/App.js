@@ -21,7 +21,7 @@ function App() {
 
   // Multiple equations state: [{ id, expr, color }]
   const [equations, setEquations] = useState([
-    { id: 1, expr: '0.5*x', color: '#61dafb' },
+    { id: 1, expr: '0.5*x', color: '#61dafb', min: -200, max: 200 },
   ]);
 
   const [paused, setPaused] = useState(true);
@@ -58,14 +58,26 @@ function App() {
     /** Add a new equation row with optional starting expression */
     const nextId = (equations.at(-1)?.id || 0) + 1;
     const color = colorCycle[(nextId - 1) % colorCycle.length];
-    setEquations((list) => [...list, { id: nextId, expr, color }]);
+    setEquations((list) => [...list, { id: nextId, expr, color, min: -200, max: 200 }]);
   }
 
   // PUBLIC_INTERFACE
-  function updateEquation(id, expr) {
-    /** Update an existing equation expression by id */
+  function updateEquation(id, payload) {
+    /** Update an existing equation expression and optional domain by id */
     setEquations((list) =>
-      list.map((e) => (e.id === id ? { ...e, expr } : e))
+      list.map((e) => {
+        if (e.id !== id) return e;
+        if (typeof payload === 'string') {
+          return { ...e, expr: payload };
+        }
+        const { expr, min, max } = payload || {};
+        return {
+          ...e,
+          expr: expr ?? e.expr,
+          min: isFinite(min) ? Number(min) : e.min,
+          max: isFinite(max) ? Number(max) : e.max,
+        };
+      })
     );
   }
 
@@ -76,9 +88,9 @@ function App() {
   }
 
   // PUBLIC_INTERFACE
-  function applyEquation(id, expr) {
+  function applyEquation(id, payload) {
     /** Apply equation change and count as a move if game is running */
-    updateEquation(id, expr);
+    updateEquation(id, payload);
     setMoves((m) => (!paused ? m + 1 : m));
   }
 
@@ -222,8 +234,10 @@ function App() {
                       />
                       <div style={{ flex: 1 }}>
                         <EquationInput
-                          onApply={(expr) => applyEquation(eq.id, expr)}
+                          onApply={(payload) => applyEquation(eq.id, payload)}
                           initialValue={eq.expr}
+                          initialMin={eq.min ?? -200}
+                          initialMax={eq.max ?? 200}
                         />
                       </div>
                       <button
@@ -292,7 +306,7 @@ function App() {
               >
                 <GameCanvas
                   key={resetSeed}
-                  expressions={equations} // pass array [{id, expr, color}]
+                  expressions={equations} // [{id, expr, color, min, max}]
                   paused={paused}
                   onStarStats={onStarStats}
                   onComplete={onGameComplete}

@@ -1,30 +1,41 @@
 import React, { useEffect, useState } from 'react';
 import { create, all } from 'mathjs';
+import RangeInput from './RangeInput';
 
 const math = create(all, {});
 
 /**
  * PUBLIC_INTERFACE
  */
-export default function EquationInput({ onApply, initialValue = '' }) {
+export default function EquationInput({
+  onApply,
+  initialValue = '',
+  initialMin = -200,
+  initialMax = 200,
+}) {
   /**
-   * Equation input allows users to enter y=f(x).
+   * Equation input allows users to enter y=f(x) and select a domain [min,max].
    * Accepts mathjs expressions, e.g., 0.5*x, x^2/100, sin(x), 0.002*x^3 - 0.3*x
    * Variables: x
    */
   const [value, setValue] = useState(initialValue);
   const [error, setError] = useState('');
+  const [range, setRange] = useState({ min: initialMin, max: initialMax, valid: true });
 
   useEffect(() => {
     setValue(initialValue);
   }, [initialValue]);
 
+  useEffect(() => {
+    setRange({ min: initialMin, max: initialMax, valid: true });
+  }, [initialMin, initialMax]);
+
   const validate = (expr) => {
     try {
       const compiled = math.compile(expr);
-      // test evaluation
-      compiled.evaluate({ x: 0 });
-      compiled.evaluate({ x: 10 });
+      // test evaluation across the domain boundaries to catch errors
+      compiled.evaluate({ x: range.min });
+      compiled.evaluate({ x: range.max });
       return '';
     } catch (e) {
       return e?.message || 'Invalid expression';
@@ -34,7 +45,10 @@ export default function EquationInput({ onApply, initialValue = '' }) {
   const handleApply = () => {
     const err = validate(value);
     setError(err);
-    if (!err) onApply(value);
+    if (!err && range.valid) {
+      // Backwards compatible: if parent expects a string, it will receive an object; all usages updated in App.
+      onApply({ expr: value, min: Number(range.min), max: Number(range.max) });
+    }
   };
 
   const presets = [
@@ -88,28 +102,35 @@ export default function EquationInput({ onApply, initialValue = '' }) {
         </div>
       )}
 
-      <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {presets.map((p) => (
-          <button
-            key={p.expr}
-            onClick={() => {
-              setValue(p.expr);
-              setError('');
-            }}
-            style={{
-              borderRadius: 20,
-              padding: '6px 10px',
-              border: '1px solid var(--border-color)',
-              background: 'transparent',
-              cursor: 'pointer',
-              fontSize: 12,
-            }}
-            aria-label={`Preset ${p.label}`}
-            title={p.expr}
-          >
-            {p.label}
-          </button>
-        ))}
+      <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <RangeInput
+          initialMin={initialMin}
+          initialMax={initialMax}
+          onChange={(r) => setRange(r)}
+        />
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {presets.map((p) => (
+            <button
+              key={p.expr}
+              onClick={() => {
+                setValue(p.expr);
+                setError('');
+              }}
+              style={{
+                borderRadius: 20,
+                padding: '6px 10px',
+                border: '1px solid var(--border-color)',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: 12,
+              }}
+              aria-label={`Preset ${p.label}`}
+              title={p.expr}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

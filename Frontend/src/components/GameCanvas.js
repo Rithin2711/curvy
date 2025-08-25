@@ -60,8 +60,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const w = dimensions.w;
     const h = dimensions.h;
 
-    const xMin = -w / 2;
-    const xMax = w / 2;
+    // Default canvas bounds, but per-curve sampling uses provided [min,max]
     const step = 2; // px per sample in world x
 
     const xToPx = (x) => x + w / 2;
@@ -73,6 +72,17 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     compiledList.forEach((item) => {
       const pts = [];
       if (item.compiled) {
+        // Get the declared domain for this expression from expressions prop
+        const src = (expressions || []).find((e) => e.id === item.id);
+        let xMin = isFinite(src?.min) ? Number(src.min) : -w / 2;
+        let xMax = isFinite(src?.max) ? Number(src.max) : w / 2;
+        if (xMin > xMax) {
+          // swap if invalid
+          const t = xMin;
+          xMin = xMax;
+          xMax = t;
+        }
+        // sample only within the desired domain
         for (let x = xMin; x <= xMax; x += step) {
           try {
             const y = item.compiled.evaluate({ x });
@@ -91,6 +101,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         points: pts,
         xToPx,
         yToPx,
+        // store domain for runtime clamping
+        min: (expressions || []).find((e) => e.id === item.id)?.min,
+        max: (expressions || []).find((e) => e.id === item.id)?.max,
       });
     });
 
@@ -271,7 +284,10 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         ctx.lineTo(pad + 18, y);
         ctx.stroke();
         ctx.fillStyle = '#cbd5e1';
-        const label = c.expr?.length > 38 ? c.expr.slice(0, 35) + '…' : c.expr || '(invalid)';
+        const labelExpr = c.expr?.length > 30 ? c.expr.slice(0, 27) + '…' : c.expr || '(invalid)';
+        const domMin = isFinite(c.min) ? c.min : '−∞';
+        const domMax = isFinite(c.max) ? c.max : '∞';
+        const label = `${labelExpr}  [${domMin}, ${domMax}]`;
         ctx.fillText(label, pad + 24, y + 4);
         y += 18;
       });
@@ -294,7 +310,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     }
 
     function nearestPointOnCurves(x, y) {
-      // Find nearest sampled point across all curves
+      // Find nearest sampled point across all curves (points already in-domain)
       let best = null;
       curves.forEach((c) => {
         for (let i = 0; i < c.points.length; i++) {
@@ -338,6 +354,15 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         // Snap ball position to nearest point to reduce drift
         x = near.p.x;
         y = near.p.y;
+
+        // Clamp x inside curve domain if provided
+        const minX = isFinite(c.min) ? Number(c.min) : -Infinity;
+        const maxX = isFinite(c.max) ? Number(c.max) : Infinity;
+        if (x < minX + 0.5 * step || x > maxX - 0.5 * step) {
+          // Dampen speed near edges to avoid jitter
+          vx *= 0.5;
+          vy *= 0.5;
+        }
 
         // Project velocity along tangent
         const v_tan = vx * ux + vy * uy;
