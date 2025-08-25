@@ -22,22 +22,11 @@
 }
 
 .App {
-  text-align: center;
+  text-align: left;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   min-height: 100vh;
   transition: background-color 0.3s ease, color 0.3s ease;
-}
-
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
 }
 
 .App-header {
@@ -45,12 +34,23 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
+  align-items: stretch;
+  justify-content: flex-start;
+  font-size: 16px;
   color: var(--text-primary);
   transition: background-color 0.3s ease;
   position: relative;
+  padding-top: 60px;
+}
+
+.container .title {
+  font-size: 28px;
+  margin: 0;
+}
+.container .subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 6px 0 16px 0;
 }
 
 .App-link {
@@ -60,13 +60,13 @@
 
 .theme-toggle {
   position: absolute;
-  top: 20px;
-  right: 20px;
+  top: 14px;
+  right: 16px;
   background-color: var(--button-bg);
   color: var(--button-text);
   border: none;
   border-radius: 8px;
-  padding: 10px 20px;
+  padding: 8px 14px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -84,12 +84,47 @@
   transform: translateY(0);
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
+.graph-panel, .game-panel, .leaderboard-panel, .equation-panel {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.graph-canvas {
+  width: 100%;
+  height: 260px;
+}
+
+.game-canvas {
+  width: 100%;
+  height: 420px;
+  background: linear-gradient(180deg, #111, #333);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.leaderboard-panel table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.leaderboard-panel th, .leaderboard-panel td {
+  border-bottom: 1px solid var(--border-color);
+  padding: 8px;
+  text-align: left;
+}
+.leaderboard-panel th {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+input[type="text"] {
+  outline: none;
+}
+
+@media (max-width: 900px) {
+  .game-canvas {
+    height: 360px;
   }
 }
 
