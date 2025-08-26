@@ -311,6 +311,9 @@ function App() {
                   onStarStats={onStarStats}
                   onComplete={onGameComplete}
                 />
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  Sequencing enabled: the ball will move to the next equation automatically when it reaches the current path's end.
+                </div>
               </div>
               <div aria-live="polite" style={{ minHeight: 22, color: 'var(--text-secondary)' }}>
                 {statusMsg}
