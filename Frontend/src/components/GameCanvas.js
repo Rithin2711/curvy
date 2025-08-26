@@ -220,7 +220,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
   // Constrained motion step with sequencing
   function constrainedStep(dt) {
-    if (paused) return { ...state };
+    // Always keep the loop running; only movement depends on paused.
     if (isIdleAtEndRef.current) return { ...state };
 
     const active = getActiveCurve();
@@ -229,6 +229,15 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const minX = Number(active.min);
     const maxX = Number(active.max);
     const speed = speedPxPerSecRef.current;
+
+    // If paused, stick to current x but still evaluate y to stay on curve visually
+    if (paused) {
+      let yHold = state.y;
+      try { yHold = active.compiled.evaluate({ x: sRef.current }); } catch {}
+      return { x: sRef.current, y: yHold };
+    }
+
+    // Advance position along x
     let s = sRef.current + dirRef.current * speed * dt;
 
     // At or beyond end -> advance to next curve or stop
@@ -514,9 +523,20 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curves, dimensions.h, dimensions.w, expressions, onComplete, onStarStats, paused]);
 
-  // Reset animation timestamp when paused toggles
+  // Reset animation timestamp when paused toggles and nudge forward when resuming
   useEffect(() => {
     lastTsRef.current = 0;
+    if (!paused) {
+      // Nudge forward a tiny step to make motion visually apparent right away.
+      const active = getActiveCurve();
+      if (active) {
+        const tiny = 0.001; // seconds
+        const speed = speedPxPerSecRef.current;
+        let s = sRef.current + dirRef.current * speed * tiny;
+        s = Math.min(Math.max(s, Number(active.min)), Number(active.max));
+        sRef.current = s;
+      }
+    }
   }, [paused]);
 
   // Notify stars on mount
