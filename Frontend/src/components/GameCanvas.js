@@ -10,6 +10,7 @@ const math = create(all, {});
  * - A ball animates exactly along the active curve (y = f(x)), step-by-step.
  * - The path is traced with a fading polyline synchronized to ball movement.
  * - When a curve reaches its domain end, it advances to the next curve (sequence).
+ * - Stars are placed along/near curves and can be collected by the ball.
  */
 export default function GameCanvas({ expressions = [], paused, onStarStats, onComplete, onCurveFinished }) {
   const containerRef = useRef(null);
@@ -30,7 +31,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // Curves, each holds sampled points and domain
   const [curves, setCurves] = useState([]);
 
-  // Current world state of ball
+  // Current world state of ball (world units: x and y are math-space)
   const [state, setState] = useState({ x: 0, y: 0 });
 
   // Refs for animation state
@@ -42,9 +43,12 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   const animationRef = useRef(0);
   const lastTsRef = useRef(0);
 
-  // Stars data
+  // Stars data (canvas coordinates)
   const starsRef = useRef([]);
   const collectedRef = useRef([]);
+
+  // Small pop animation state
+  const starAnimRef = useRef({ phases: new Map() });
 
   // Path trace buffer
   const pathRef = useRef([]);
@@ -138,7 +142,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     // Reset trace to new start
     pathRef.current = [{ x: startX, y: startY, t: performance.now() }];
 
-    // Initialize stars stable by canvas size
+    // Initialize default stars (temporary baseline; will be replaced by curve-based stars below)
     const starR = 12;
     const positions = [
       { x: w * 0.2, y: h * 0.30 },
@@ -308,11 +312,25 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       });
     };
 
-    const drawStars = () => {
-      starsRef.current.forEach((s, i) => {
-        const collected = collectedRef.current[i];
-        drawStar(ctx, s.x, s.y, 5, s.r, s.r * 0.5, '#ffd166', '#ffffff', collected);
-      });
+    const drawPathTrace = (nowMs) => {
+      if (!pathRef.current || pathRef.current.length < 2) return;
+      const cutoff = nowMs - PATH_FADE_MS;
+      while (pathRef.current.length && pathRef.current[0].t < cutoff) pathRef.current.shift();
+
+      ctx.save();
+      ctx.lineWidth = 3;
+      const base = { r: 124, g: 58, b: 237 }; // purple
+      for (let i = 1; i < pathRef.current.length; i++) {
+        const a = pathRef.current[i - 1];
+        const b = pathRef.current[i];
+        const age = Math.max(0, Math.min(1, (b.t - cutoff) / PATH_FADE_MS));
+        const alpha = 0.15 + 0.55 * age;
+        ctx.strokeStyle = `rgba(${base.r}, ${base.g}, ${base.b}, ${alpha.toFixed(3)})`;
+        const { px: ax, py: ay } = worldToCanvas(w, h, a.x, a.y);
+        const { px: bx, py: by } = worldToCanvas(w, h, b.x, b.y);
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      }
+      ctx.restore();
     };
 
     const drawBall = (x, y) => {
@@ -370,41 +388,63 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       }
     };
 
-    const drawPathTrace = (nowMs) => {
-      if (!pathRef.current || pathRef.current.length < 2) return;
-      const cutoff = nowMs - PATH_FADE_MS;
-      while (pathRef.current.length && pathRef.current[0].t < cutoff) pathRef.current.shift();
-
-      ctx.save();
-      ctx.lineWidth = 3;
-      const base = { r: 124, g: 58, b: 237 }; // purple
-      for (let i = 1; i < pathRef.current.length; i++) {
-        const a = pathRef.current[i - 1];
-        const b = pathRef.current[i];
-        const age = Math.max(0, Math.min(1, (b.t - cutoff) / PATH_FADE_MS));
-        const alpha = 0.15 + 0.55 * age;
-        ctx.strokeStyle = `rgba(${base.r}, ${base.g}, ${base.b}, ${alpha.toFixed(3)})`;
-        const { px: ax, py: ay } = worldToCanvas(w, h, a.x, a.y);
-        const { px: bx, py: by } = worldToCanvas(w, h, b.x, b.y);
-        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-      }
-      ctx.restore();
+    const triggerStarPop = (id) => {
+      starAnimRef.current.phases.set(id, { t0: performance.now(), dur: 400 });
     };
 
-    const checkStars = (x, y) => {
+    const drawStars = (nowTs) => {
+      // Draw non-collected with pulse, collected as ghost, and overlay pop animations
+      starsRef.current.forEach((s, i) => {
+        const collected = collectedRef.current[i];
+        if (!collected) {
+          const pulse = 0.5 + 0.5 * Math.sin(nowTs / 200);
+          const rOuter = s.r * (1 + 0.05 * Math.sin(nowTs / 300));
+          const prevShadow = { color: ctx.shadowColor, blur: ctx.shadowBlur };
+          ctx.shadowColor = '#ffd166';
+          ctx.shadowBlur = 8 + 6 * pulse;
+          drawStar(ctx, s.x, s.y, 5, rOuter, rOuter * 0.5, '#ffd166', '#ffffff', false);
+          ctx.shadowColor = prevShadow.color;
+          ctx.shadowBlur = prevShadow.blur;
+        } else {
+          drawStar(ctx, s.x, s.y, 5, s.r, s.r * 0.5, 'rgba(255,255,255,0.10)', 'rgba(255,255,255,0.25)', true);
+        }
+      });
+
+      // Pop animations
+      for (const [id, phase] of Array.from(starAnimRef.current.phases.entries())) {
+        const s = starsRef.current.find(st => st.id === id);
+        if (!s) { starAnimRef.current.phases.delete(id); continue; }
+        const t = (nowTs - phase.t0) / phase.dur;
+        if (t >= 1) { starAnimRef.current.phases.delete(id); continue; }
+        const scale = 1 + 0.6 * Math.sin(Math.PI * t);
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        ctx.scale(scale, scale);
+        drawStar(ctx, 0, 0, 5, s.r * 0.6, s.r * 0.3, 'rgba(255,209,102,0.6)', 'rgba(255,255,255,0.8)', false);
+        ctx.restore();
+      }
+    };
+
+    const checkAndCollectStars = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
       let newly = 0;
       starsRef.current.forEach((s, i) => {
         if (!collectedRef.current[i]) {
           const d = Math.hypot(px - s.x, py - s.y);
-          if (d <= s.r + 12) { collectedRef.current[i] = true; newly++; }
+          if (d <= s.r + 12) {
+            collectedRef.current[i] = true;
+            newly++;
+            triggerStarPop(s.id);
+          }
         }
       });
       if (newly > 0) {
         const c = collectedRef.current.filter(Boolean).length;
         onStarStats && onStarStats({ collected: c, total: collectedRef.current.length });
         if (c === collectedRef.current.length) {
-          onComplete && onComplete(Math.max(0, Math.round(1000 - py)));
+          setTimeout(() => {
+            onComplete && onComplete(Math.max(0, Math.round(1000 - py)));
+          }, 300);
         }
       }
     };
@@ -414,6 +454,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       const dt = Math.min(0.05, (ts - lastTsRef.current) / 1000);
       lastTsRef.current = ts;
 
+      const prev = { ...state };
       const next = constrainedStep(dt);
 
       // Push to path if moved a bit
@@ -431,12 +472,15 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       drawBackground();
       drawGridAndAxes();
       drawCurves();
-      drawStars();
+      drawStars(performance.now());
       drawPathTrace(performance.now());
       drawBall(next.x, next.y);
       drawLegend();
 
-      checkStars(next.x, next.y);
+      // Only check when moved a little to avoid duplicate triggers on pause
+      if (Math.hypot(next.x - prev.x, next.y - prev.y) > 0.01) {
+        checkAndCollectStars(next.x, next.y);
+      }
 
       animationRef.current = requestAnimationFrame(raf);
     }
@@ -461,6 +505,67 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     }
   }, [paused]);
 
+  // PUBLIC_INTERFACE
+  function generateStarsForCurves(w, h, curvesIn) {
+    /**
+     * Place stars along or slightly offset from curve points to encourage path following.
+     * Returns array of { id, x, y, r } in CANVAS coordinates.
+     */
+    const result = [];
+    let id = 0;
+    const offset = 16; // pixels offset orthogonal-ish
+    const targetCount = 5;
+    const usableCurves = (curvesIn || []).filter(c => c.points && c.points.length > 10);
+    if (usableCurves.length === 0) return result;
+
+    // Distribute roughly evenly across all curves
+    const perCurve = Math.max(1, Math.round(targetCount / usableCurves.length));
+    usableCurves.forEach((c) => {
+      const n = Math.min(perCurve, Math.max(1, Math.floor(c.points.length / 30)));
+      for (let k = 1; k <= n; k++) {
+        const idx = Math.min(c.points.length - 1, Math.floor((k / (n + 1)) * c.points.length));
+        const p = c.points[idx];
+        // approximate local tangent using neighbors
+        const p0 = c.points[Math.max(0, idx - 1)];
+        const p1 = c.points[Math.min(c.points.length - 1, idx + 1)];
+        const dx = p1.px - p0.px;
+        const dy = p1.py - p0.py;
+        // normal vector
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        // alternate offset directions
+        const dir = (k % 2 === 0) ? 1 : -1;
+        const cx = p.px + dir * offset * nx;
+        const cy = p.py + dir * offset * ny;
+        result.push({ id: id++, x: cx, y: cy, r: 12 });
+      }
+    });
+
+    // Ensure at least targetCount by adding more along first curve if needed
+    while (result.length < targetCount && usableCurves[0]) {
+      const c = usableCurves[0];
+      const idx = Math.min(c.points.length - 1, Math.floor(Math.random() * c.points.length));
+      const p = c.points[idx];
+      result.push({ id: id++, x: p.px, y: p.py, r: 12 });
+    }
+
+    return result.slice(0, targetCount);
+  }
+
+  // Regenerate stars whenever curves or canvas size change
+  useEffect(() => {
+    if (!curves || curves.length === 0) return;
+    const w = dimensions.w, h = dimensions.h;
+    const stars = generateStarsForCurves(w, h, curves);
+    if (stars.length > 0) {
+      starsRef.current = stars;
+      collectedRef.current = stars.map(() => false);
+      onStarStats && onStarStats({ collected: 0, total: stars.length });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curves, dimensions.w, dimensions.h]);
+
   // Initial star stats on mount
   useEffect(() => {
     onStarStats && onStarStats({
@@ -477,7 +582,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
           ref={canvasRef}
           className="game-canvas"
           role="application"
-          aria-label="Unified Graph and Game Canvas with Path Trace"
+          aria-label="Unified Graph and Game Canvas with Path Trace and Stars"
         />
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
