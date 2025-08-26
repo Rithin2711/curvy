@@ -11,18 +11,16 @@ function App() {
   /**
    * This is the main Gravity Curve app. It renders:
    * - Theme toggle
-   * - Multiple equation input with validation and list management
-   * - Unified canvas for graph + gameplay rendering multiple curves
+   * - Single equation input with validation
+   * - Unified canvas for graph + gameplay rendering a single curve
    * - Pause/Resume/Reset controls and HUD
    * - Leaderboard view
    * It integrates with backend APIs via the services/api module.
    */
   const [theme, setTheme] = useState('light');
 
-  // Multiple equations state: [{ id, expr, color }]
-  const [equations, setEquations] = useState([
-    { id: 1, expr: '0.5*x', color: '#61dafb', min: -200, max: 200 },
-  ]);
+  // Single equation state
+  const [equation, setEquation] = useState({ id: 1, expr: '0.5*x', color: '#61dafb', min: -200, max: 200 });
 
   const [paused, setPaused] = useState(true);
   const [resetSeed, setResetSeed] = useState(0);
@@ -51,46 +49,16 @@ function App() {
     };
   }, [api]);
 
-  const colorCycle = ['#61dafb', '#22d3ee', '#f59e0b', '#10b981', '#eab308', '#ef4444', '#8b5cf6', '#ec4899'];
-
   // PUBLIC_INTERFACE
-  function addEquation(expr = '') {
-    /** Add a new equation row with optional starting expression */
-    const nextId = (equations.at(-1)?.id || 0) + 1;
-    const color = colorCycle[(nextId - 1) % colorCycle.length];
-    setEquations((list) => [...list, { id: nextId, expr, color, min: -200, max: 200 }]);
-  }
-
-  // PUBLIC_INTERFACE
-  function updateEquation(id, payload) {
-    /** Update an existing equation expression and optional domain by id */
-    setEquations((list) =>
-      list.map((e) => {
-        if (e.id !== id) return e;
-        if (typeof payload === 'string') {
-          return { ...e, expr: payload };
-        }
-        const { expr, min, max } = payload || {};
-        return {
-          ...e,
-          expr: expr ?? e.expr,
-          min: isFinite(min) ? Number(min) : e.min,
-          max: isFinite(max) ? Number(max) : e.max,
-        };
-      })
-    );
-  }
-
-  // PUBLIC_INTERFACE
-  function removeEquation(id) {
-    /** Remove an equation from the list */
-    setEquations((list) => list.filter((e) => e.id !== id));
-  }
-
-  // PUBLIC_INTERFACE
-  function applyEquation(id, payload) {
+  function applyEquation(payload) {
     /** Apply equation change and count as a move if game is running */
-    updateEquation(id, payload);
+    const { expr, min, max } = payload || {};
+    setEquation((prev) => ({
+      ...prev,
+      expr: typeof expr === 'string' ? expr : prev.expr,
+      min: isFinite(min) ? Number(min) : prev.min,
+      max: isFinite(max) ? Number(max) : prev.max,
+    }));
     setMoves((m) => (!paused ? m + 1 : m));
   }
 
@@ -197,70 +165,33 @@ function App() {
                 </button>
               </div>
 
-              {/* Multiple equation inputs */}
+              {/* Single equation input */}
               <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ fontWeight: 600 }}>Equations y = f(x)</div>
-                  <button
-                    onClick={() => addEquation('')}
-                    className="btn"
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: 8,
-                      border: 'none',
-                      background: 'var(--button-bg)',
-                      color: 'var(--button-text)',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                    }}
-                    aria-label="Add equation"
-                  >
-                    + Add
-                  </button>
+                  <div style={{ fontWeight: 600 }}>Equation y = f(x)</div>
                 </div>
                 <div style={{ display: 'grid', gap: 8 }}>
-                  {equations.map((eq) => (
-                    <div key={eq.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <div
-                        style={{
-                          width: 12,
-                          height: 12,
-                          borderRadius: 2,
-                          background: eq.color,
-                          border: '1px solid rgba(0,0,0,0.1)'
-                        }}
-                        aria-label={`Color for equation ${eq.id}`}
-                        title={eq.color}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div
+                      style={{
+                        width: 12,
+                        height: 12,
+                        borderRadius: 2,
+                        background: equation.color,
+                        border: '1px solid rgba(0,0,0,0.1)'
+                      }}
+                      aria-label="Equation color"
+                      title={equation.color}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <EquationInput
+                        onApply={(payload) => applyEquation(payload)}
+                        initialValue={equation.expr}
+                        initialMin={equation.min ?? -200}
+                        initialMax={equation.max ?? 200}
                       />
-                      <div style={{ flex: 1 }}>
-                        <EquationInput
-                          onApply={(payload) => applyEquation(eq.id, payload)}
-                          initialValue={eq.expr}
-                          initialMin={eq.min ?? -200}
-                          initialMax={eq.max ?? 200}
-                        />
-                      </div>
-                      <button
-                        onClick={() => removeEquation(eq.id)}
-                        aria-label={`Remove equation ${eq.id}`}
-                        title="Remove"
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: 8,
-                          border: '1px solid var(--border-color)',
-                          background: 'transparent',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        ✕
-                      </button>
                     </div>
-                  ))}
-                  {equations.length === 0 && (
-                    <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                      No equations. Click "Add" to insert one.
-                    </div>
-                  )}
+                  </div>
                 </div>
               </div>
 
@@ -306,13 +237,13 @@ function App() {
               >
                 <GameCanvas
                   key={resetSeed}
-                  expressions={equations} // [{id, expr, color, min, max}]
+                  expressions={[equation]} // single equation
                   paused={paused}
                   onStarStats={onStarStats}
                   onComplete={onGameComplete}
                 />
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  Sequencing enabled: the ball will move to the next equation automatically when it reaches the current path's end.
+                  Single-path mode: the ball follows only the current equation and stops at the end of its domain.
                 </div>
               </div>
               <div aria-live="polite" style={{ minHeight: 22, color: 'var(--text-secondary)' }}>
