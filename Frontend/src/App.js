@@ -11,16 +11,19 @@ function App() {
   /**
    * This is the main Gravity Curve app. It renders:
    * - Theme toggle
-   * - Single equation input with validation
-   * - Unified canvas for graph + gameplay rendering a single curve
+   * - Multiple equation inputs (sequence)
+   * - Unified canvas for graph + gameplay rendering curves followed in sequence
    * - Pause/Resume/Reset controls and HUD
    * - Leaderboard view
    * It integrates with backend APIs via the services/api module.
    */
   const [theme, setTheme] = useState('light');
 
-  // Single equation state
-  const [equation, setEquation] = useState({ id: 1, expr: '0.5*x', color: '#61dafb', min: -200, max: 200 });
+  // Multi-curve state: an ordered list of equations with domains and colors
+  const [equations, setEquations] = useState([
+    { id: 1, expr: '0.5*x', color: '#61dafb', min: -200, max: 200 },
+  ]);
+  const [activeIndex, setActiveIndex] = useState(0);
 
   const [paused, setPaused] = useState(true);
   const [resetSeed, setResetSeed] = useState(0);
@@ -50,17 +53,50 @@ function App() {
   }, [api]);
 
   // PUBLIC_INTERFACE
-  function applyEquation(payload) {
-    /** Apply equation change and count as a move if game is running */
+  function applyEquationAt(index, payload) {
+    /** Apply equation change for a specific index and count as a move if game is running */
     const { expr, min, max } = payload || {};
-    setEquation((prev) => ({
-      ...prev,
-      expr: typeof expr === 'string' ? expr : prev.expr,
-      min: isFinite(min) ? Number(min) : prev.min,
-      max: isFinite(max) ? Number(max) : prev.max,
-    }));
+    setEquations((prev) => {
+      const next = [...prev];
+      if (!next[index]) return prev;
+      next[index] = {
+        ...next[index],
+        expr: typeof expr === 'string' ? expr : next[index].expr,
+        min: isFinite(min) ? Number(min) : next[index].min,
+        max: isFinite(max) ? Number(max) : next[index].max,
+      };
+      return next;
+    });
     setMoves((m) => (!paused ? m + 1 : m));
   }
+
+  const addEquation = () => {
+    setEquations((prev) => {
+      const id = prev.length ? Math.max(...prev.map((p) => p.id || 0)) + 1 : 1;
+      const palette = ['#61dafb', '#a78bfa', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#f97316'];
+      const color = palette[(id - 1) % palette.length];
+      return [
+        ...prev,
+        { id, expr: '0.5*x', color, min: -200, max: 200 },
+      ];
+    });
+  };
+
+  const removeEquation = (id) => {
+    setEquations((prev) => prev.filter((e) => e.id !== id));
+    setActiveIndex((idx) => Math.min(idx, Math.max(0, equations.length - 2)));
+  };
+
+  const moveEquation = (from, to) => {
+    if (to < 0 || to >= equations.length) return;
+    setEquations((prev) => {
+      const arr = [...prev];
+      const [item] = arr.splice(from, 1);
+      arr.splice(to, 0, item);
+      return arr;
+    });
+    setActiveIndex((idx) => (idx === from ? to : idx));
+  };
 
   const onPauseToggle = () => {
     setPaused((p) => !p);
@@ -72,6 +108,7 @@ function App() {
     setCollected(0);
     setStatusMsg('');
     setPaused(true);
+    setActiveIndex(0);
   };
 
   const onGameComplete = async (score) => {
@@ -91,10 +128,18 @@ function App() {
     setTotalStars(stats.total);
   };
 
+  // Called by GameCanvas when it finishes a curve domain; advance to next
+  const onCurveFinished = (nextIndex) => {
+    setActiveIndex(nextIndex);
+  };
+
   // PUBLIC_INTERFACE
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
+
+  // Derive expressions with order based on current ordering
+  const orderedExpressions = equations.map((e, idx) => ({ ...e, orderIndex: idx }));
 
   return (
     <div className="App">
@@ -165,33 +210,103 @@ function App() {
                 </button>
               </div>
 
-              {/* Single equation input */}
+              {/* Multiple equations input list */}
               <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ fontWeight: 600 }}>Equation y = f(x)</div>
+                  <div style={{ fontWeight: 600 }}>Equation sequence (y = f(x))</div>
+                  <button
+                    onClick={addEquation}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: 6,
+                      border: '1px solid var(--border-color)',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                    aria-label="Add equation"
+                  >
+                    + Add
+                  </button>
                 </div>
                 <div style={{ display: 'grid', gap: 8 }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <div
-                      style={{
-                        width: 12,
-                        height: 12,
-                        borderRadius: 2,
-                        background: equation.color,
-                        border: '1px solid rgba(0,0,0,0.1)'
-                      }}
-                      aria-label="Equation color"
-                      title={equation.color}
-                    />
-                    <div style={{ flex: 1 }}>
-                      <EquationInput
-                        onApply={(payload) => applyEquation(payload)}
-                        initialValue={equation.expr}
-                        initialMin={equation.min ?? -200}
-                        initialMax={equation.max ?? 200}
-                      />
+                  {equations.map((eq, idx) => (
+                    <div key={eq.id} style={{ display: 'grid', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <div
+                          style={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: 2,
+                            background: eq.color,
+                            border: '1px solid rgba(0,0,0,0.1)'
+                          }}
+                          aria-label={`Equation ${idx + 1} color`}
+                          title={eq.color}
+                        />
+                        <div style={{ fontWeight: 600, fontSize: 12 }}>
+                          #{idx + 1} {idx === activeIndex ? '(active)' : ''}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                          <button
+                            onClick={() => moveEquation(idx, idx - 1)}
+                            disabled={idx === 0}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 6,
+                              border: '1px solid var(--border-color)',
+                              background: 'transparent',
+                              cursor: idx === 0 ? 'not-allowed' : 'pointer',
+                              fontSize: 12
+                            }}
+                            aria-label="Move up"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            onClick={() => moveEquation(idx, idx + 1)}
+                            disabled={idx === equations.length - 1}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 6,
+                              border: '1px solid var(--border-color)',
+                              background: 'transparent',
+                              cursor: idx === equations.length - 1 ? 'not-allowed' : 'pointer',
+                              fontSize: 12
+                            }}
+                            aria-label="Move down"
+                          >
+                            ↓
+                          </button>
+                          <button
+                            onClick={() => removeEquation(eq.id)}
+                            disabled={equations.length <= 1}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 6,
+                              border: '1px solid var(--border-color)',
+                              background: 'transparent',
+                              cursor: equations.length <= 1 ? 'not-allowed' : 'pointer',
+                              fontSize: 12,
+                              color: '#dc3545'
+                            }}
+                            aria-label="Remove equation"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <EquationInput
+                          onApply={(payload) => applyEquationAt(idx, payload)}
+                          initialValue={eq.expr}
+                          initialMin={eq.min ?? -200}
+                          initialMax={eq.max ?? 200}
+                        />
+                      </div>
+                      <div style={{ height: 1, background: 'var(--border-color)' }} />
                     </div>
-                  </div>
+                  ))}
                 </div>
               </div>
 
@@ -237,13 +352,14 @@ function App() {
               >
                 <GameCanvas
                   key={resetSeed}
-                  expressions={[equation]} // single equation
+                  expressions={orderedExpressions}
                   paused={paused}
                   onStarStats={onStarStats}
                   onComplete={onGameComplete}
+                  onCurveFinished={onCurveFinished}
                 />
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  Single-path mode: the ball follows only the current equation and stops at the end of its domain.
+                  Sequencing mode: the ball follows each equation in order. When a path ends, it automatically continues to the next. Stops after the last curve.
                 </div>
               </div>
               <div aria-live="polite" style={{ minHeight: 22, color: 'var(--text-secondary)' }}>
