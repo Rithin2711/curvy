@@ -243,9 +243,11 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         sRef.current = start.x;
         dirRef.current = 1;
         isIdleAtEndRef.current = false;
-        onCurveFinished && onCurveFinished(activeOrderIndexRef.current);
+        // Inform parent to update active index to this next curve
+        onCurveFinished && onCurveFinished((next.orderIndex ?? 0));
         return { x: start.x, y: start.y };
       } else {
+        // No more curves; end of sequence
         isIdleAtEndRef.current = true;
         onCurveFinished && onCurveFinished((active.orderIndex ?? 0) + 1);
         return { x: s, y: yEdge };
@@ -480,6 +482,18 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       // Only check when moved a little to avoid duplicate triggers on pause
       if (Math.hypot(next.x - prev.x, next.y - prev.y) > 0.01) {
         checkAndCollectStars(next.x, next.y);
+      }
+
+      // If idle at end, still allow a last check for completion
+      if (isIdleAtEndRef.current) {
+        const total = (collectedRef.current || []).length;
+        const got = (collectedRef.current || []).filter(Boolean).length;
+        onStarStats && onStarStats({ collected: got, total });
+        if (total > 0 && got >= total) {
+          // Success path, already handled by onComplete when last stars collected
+        } else {
+          // If not all collected, we don't auto-complete here; parent will show failure via onCurveFinished
+        }
       }
 
       animationRef.current = requestAnimationFrame(raf);

@@ -33,6 +33,8 @@ function App() {
   const [username, setUsername] = useState('guest');
   const [leaderboard, setLeaderboard] = useState([]);
   const [statusMsg, setStatusMsg] = useState('');
+  const [showEndModal, setShowEndModal] = useState(false);
+  const [endResult, setEndResult] = useState({ success: false, collected: 0, total: 0 });
 
   const api = useMemo(() => createApi(), []);
 
@@ -109,9 +111,17 @@ function App() {
     setStatusMsg('');
     setPaused(true);
     setActiveIndex(0);
+    setShowEndModal(false);
+    setEndResult({ success: false, collected: 0, total: 0 });
   };
 
   const onGameComplete = async (score) => {
+    // Trigger only if user collected all stars; this is also set by onCurveFinished when sequence ends
+    const success = collected >= totalStars && totalStars > 0;
+    if (success) {
+      setShowEndModal(true);
+      setEndResult({ success: true, collected, total: totalStars });
+    }
     setStatusMsg('Level complete! Submitting score...');
     try {
       await api.submitScore({ username, score, moves });
@@ -131,6 +141,17 @@ function App() {
   // Called by GameCanvas when it finishes a curve domain; advance to next
   const onCurveFinished = (nextIndex) => {
     setActiveIndex(nextIndex);
+    // If sequence finished (nextIndex >= equations length) show final result
+    if (nextIndex >= equations.length) {
+      const success = collected >= totalStars && totalStars > 0;
+      setShowEndModal(true);
+      setEndResult({ success, collected, total: totalStars });
+      if (!success) {
+        setStatusMsg('Level failed: not all stars were collected.');
+      } else {
+        setStatusMsg('Level complete! Submitting score...');
+      }
+    }
   };
 
   // PUBLIC_INTERFACE
@@ -365,6 +386,81 @@ function App() {
               <div aria-live="polite" style={{ minHeight: 22, color: 'var(--text-secondary)' }}>
                 {statusMsg}
               </div>
+
+              {showEndModal && (
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="end-modal-title"
+                  style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(0,0,0,0.45)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 1000
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 'min(480px, 92vw)',
+                      background: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 12,
+                      boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+                      padding: 16
+                    }}
+                  >
+                    <div id="end-modal-title" style={{ fontWeight: 700, fontSize: 18, marginBottom: 6 }}>
+                      {endResult.success ? 'Great job! ⭐ All stars collected' : 'Level failed'}
+                    </div>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 12 }}>
+                      Stars collected: <strong>{endResult.collected}</strong> / {endResult.total}
+                    </div>
+                    {!endResult.success && (
+                      <div style={{ color: '#dc3545', fontSize: 13, marginBottom: 12 }}>
+                        You missed some stars. Try adjusting your equations and attempt again.
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      {!endResult.success && (
+                        <button
+                          onClick={() => {
+                            setShowEndModal(false);
+                          }}
+                          style={{
+                            padding: '10px 14px',
+                            borderRadius: 8,
+                            border: '1px solid var(--border-color)',
+                            background: 'transparent',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Close
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          setShowEndModal(false);
+                          onReset();
+                        }}
+                        style={{
+                          padding: '10px 14px',
+                          borderRadius: 8,
+                          border: 'none',
+                          background: endResult.success ? '#198754' : '#0d6efd',
+                          color: '#fff',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {endResult.success ? 'Play Again' : 'Retry'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <Leaderboard items={leaderboard} />
