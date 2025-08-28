@@ -37,9 +37,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // Refs for animation state
   const activeCurveIdRef = useRef(null);
   const activeOrderIndexRef = useRef(0);
-  const sRef = useRef(0); // current parameter (x)
-  const dirRef = useRef(1); // move forward (+x)
-  const speedPxPerSecRef = useRef(120); // speed in world x per second
+  const sRef = useRef(0); // current parameter (x) along active curve domain
+  const dirRef = useRef(1); // move direction: forward (+x)
+  const speedPxPerSecRef = useRef(120); // horizontal speed in world units per second
   const animationRef = useRef(0);
   const lastTsRef = useRef(0);
 
@@ -77,6 +77,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   useEffect(() => {
     const w = dimensions.w;
     const h = dimensions.h;
+    // sampling step: keep fine enough to cover domain smoothly
     const step = 2;
 
     const xToPx = (x) => x + w / 2;
@@ -229,6 +230,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     // End of current curve?
     if (s > maxX) {
+      // clamp to rightmost extent so we fully reach the end before switching
       s = maxX;
       sRef.current = s;
       let yEdge = state.y;
@@ -276,6 +278,15 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const w = dimensions.w, h = dimensions.h;
     canvas.width = w; canvas.height = h;
 
+    // make sure state is clamped to active curve domain at render start to avoid early stops
+    const active = getActiveCurve && getActiveCurve();
+    if (active) {
+      const minX = Number(active.min);
+      const maxX = Number(active.max);
+      if (sRef.current < minX) sRef.current = minX;
+      if (sRef.current > maxX) sRef.current = maxX;
+    }
+
     const drawBackground = () => {
       const grad = ctx.createLinearGradient(0, 0, 0, h);
       grad.addColorStop(0, '#0f1220');
@@ -297,12 +308,13 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     };
 
     const drawCurves = () => {
+      // Draw full curves as background polylines (so player can see entire path)
       curves.forEach((c) => {
         if (c.points.length < 2) return;
         const isActive = c.id === activeCurveIdRef.current;
         ctx.strokeStyle = c.color || '#61dafb';
         ctx.globalAlpha = isActive ? 1 : 0.5;
-        ctx.lineWidth = isActive ? 2.5 : 1.5;
+        ctx.lineWidth = isActive ? 2.2 : 1.4;
         ctx.beginPath();
         for (let i = 0; i < c.points.length; i++) {
           const p = c.points[i];
@@ -387,6 +399,16 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       if (isIdleAtEndRef.current) {
         ctx.fillStyle = '#94a3b8';
         ctx.fillText('Sequence finished. Movement stopped.', pad, y + 20);
+      } else {
+        // Domain progress indicator for active curve
+        const active = getActiveCurve && getActiveCurve();
+        if (active) {
+          const minX = Number(active.min);
+          const maxX = Number(active.max);
+          const t = Math.min(1, Math.max(0, (sRef.current - minX) / Math.max(1e-6, (maxX - minX))));
+          ctx.fillStyle = '#cbd5e1';
+          ctx.fillText(`Progress: ${(t * 100).toFixed(0)}%`, pad, y + 20);
+        }
       }
     };
 
@@ -459,10 +481,11 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       const prev = { ...state };
       const next = constrainedStep(dt);
 
-      // Push to path if moved a bit
+      // Ensure continuous movement until rightmost extent per curve
+      // Add point to trace if moved sufficiently
       const plist = pathRef.current;
       const last = plist[plist.length - 1];
-      if (!last || Math.hypot(next.x - last.x, next.y - last.y) > 0.5) {
+      if (!last || Math.hypot(next.x - last.x, next.y - last.y) > 0.25) {
         plist.push({ x: next.x, y: next.y, t: performance.now() });
         if (plist.length > PATH_MAX_POINTS) plist.splice(0, plist.length - PATH_MAX_POINTS);
       }
@@ -474,8 +497,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       drawBackground();
       drawGridAndAxes();
       drawCurves();
-      drawStars(performance.now());
-      drawPathTrace(performance.now());
+      const now = performance.now();
+      drawStars(now);
+      drawPathTrace(now);
       drawBall(next.x, next.y);
       drawLegend();
 
@@ -484,16 +508,11 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         checkAndCollectStars(next.x, next.y);
       }
 
-      // If idle at end, still allow a last check for completion
+      // If idle at end, still allow a last check for completion stats update
       if (isIdleAtEndRef.current) {
         const total = (collectedRef.current || []).length;
         const got = (collectedRef.current || []).filter(Boolean).length;
         onStarStats && onStarStats({ collected: got, total });
-        if (total > 0 && got >= total) {
-          // Success path, already handled by onComplete when last stars collected
-        } else {
-          // If not all collected, we don't auto-complete here; parent will show failure via onCurveFinished
-        }
       }
 
       animationRef.current = requestAnimationFrame(raf);
@@ -512,6 +531,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       if (active) {
         const tiny = 0.001;
         const speed = speedPxPerSecRef.current;
+        // nudge forward but clamp within full domain to guarantee progress to end
         let s = sRef.current + dirRef.current * speed * tiny;
         s = Math.min(Math.max(s, Number(active.min)), Number(active.max));
         sRef.current = s;
@@ -522,7 +542,8 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // PUBLIC_INTERFACE
   function generateStarsForCurves(w, h, curvesIn) {
     /**
-     * Place stars along or slightly offset from curve points to encourage path following.
+     * Place stars along or slightly offset from the curves to reward full path traversal.
+     * Ensures distribution across the domain so the ball must travel leftmost->rightmost for each curve.
      * Returns array of { id, x, y, r } in CANVAS coordinates.
      */
     const result = [];
@@ -532,23 +553,23 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const usableCurves = (curvesIn || []).filter(c => c.points && c.points.length > 10);
     if (usableCurves.length === 0) return result;
 
-    // Distribute roughly evenly across all curves
-    const perCurve = Math.max(1, Math.round(targetCount / usableCurves.length));
+    // Distribute across curves and across each curve domain
+    const perCurve = Math.max(1, Math.ceil(targetCount / usableCurves.length));
     usableCurves.forEach((c) => {
-      const n = Math.min(perCurve, Math.max(1, Math.floor(c.points.length / 30)));
+      const n = Math.min(perCurve, Math.max(1, Math.floor(c.points.length / 40)));
       for (let k = 1; k <= n; k++) {
-        const idx = Math.min(c.points.length - 1, Math.floor((k / (n + 1)) * c.points.length));
+        const t = k / (n + 1); // even spacing along the domain
+        const idx = Math.min(c.points.length - 1, Math.max(0, Math.floor(t * c.points.length)));
         const p = c.points[idx];
         // approximate local tangent using neighbors
         const p0 = c.points[Math.max(0, idx - 1)];
         const p1 = c.points[Math.min(c.points.length - 1, idx + 1)];
         const dx = p1.px - p0.px;
         const dy = p1.py - p0.py;
-        // normal vector
         const len = Math.hypot(dx, dy) || 1;
         const nx = -dy / len;
         const ny = dx / len;
-        // alternate offset directions
+        // alternate offset directions so player weaves near the path
         const dir = (k % 2 === 0) ? 1 : -1;
         const cx = p.px + dir * offset * nx;
         const cy = p.py + dir * offset * ny;
@@ -556,7 +577,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       }
     });
 
-    // Ensure at least targetCount by adding more along first curve if needed
+    // Ensure at least targetCount by adding along the first usable curve if needed
     while (result.length < targetCount && usableCurves[0]) {
       const c = usableCurves[0];
       const idx = Math.min(c.points.length - 1, Math.floor(Math.random() * c.points.length));
