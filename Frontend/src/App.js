@@ -36,10 +36,11 @@ function App() {
   const [showEndModal, setShowEndModal] = useState(false);
   const [endResult, setEndResult] = useState({ success: false, collected: 0, total: 0 });
 
-  // New: input/plot gating + random start coordinate
+  // Game flow state
   const [plotReady, setPlotReady] = useState(false);
   const [startCoord, setStartCoord] = useState(null); // {x,y} in world units; displayed above canvas
   const [showInputUI, setShowInputUI] = useState(false); // controls visibility of equation inputs
+  const [plotButtonEnabled, setPlotButtonEnabled] = useState(false); // controls plot button state
 
   const api = useMemo(() => createApi(), []);
 
@@ -121,18 +122,22 @@ function App() {
     setResetSeed((s) => s + 1);
     setMoves(0);
     setCollected(0);
-    setStatusMsg('');
+    setStatusMsg('Click "Start plotting" to begin a new game!');
     setPaused(true);
     setActiveIndex(0);
     setShowEndModal(false);
     setEndResult({ success: false, collected: 0, total: 0 });
 
-    // Reset gating: hide inputs/UI and clear plot readiness
+    // Reset all game flow states
     setPlotReady(false);
     setShowInputUI(false);
-
-    // Generate a new random start coordinate; GameCanvas will fall back if not valid until plot
+    setPlotButtonEnabled(true);
     setStartCoord(null); // will regenerate when user plots again
+
+    // Reset equations to initial state
+    setEquations([
+      { id: 1, expr: '0.5*x', color: '#61dafb', min: -200, max: 200 },
+    ]);
   };
 
   const onGameComplete = async (score) => {
@@ -197,16 +202,21 @@ function App() {
       setPlotReady(false);
       return;
     }
+
     // Create a random starting point in world units which will be used by GameCanvas.
     // We select based on the first equation's [min, max] domain for clarity.
     const first = equations[0];
     const min = Number(first.min), max = Number(first.max);
     const rx = min + Math.random() * (max - min);
+    
     // y is unknown to App; GameCanvas computes y based on the active curve. We store only x here.
     setStartCoord({ x: rx }); // y will be computed and displayed by GameCanvas if needed
     setPlotReady(true);
-    setPaused(true); // start in paused state until user presses Start/Resume
-    setStatusMsg(`Random starting x selected at ${rx.toFixed(2)}. Press Start to begin.`);
+    setPaused(false); // Start movement immediately after plotting
+    setShowInputUI(false); // Hide input UI after plotting
+    setPlotButtonEnabled(false); // Disable plot button after successful plot
+    setStatusMsg(`Curve plotted! Ball starting at x = ${rx.toFixed(2)}. Game in progress...`);
+    
     // bump seed to force canvas rebuild with new startCoord
     setResetSeed((s) => s + 1);
   }
@@ -415,38 +425,42 @@ function App() {
               )}
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  onClick={onPlot}
-                  className="btn"
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 8,
-                    border: 'none',
-                    background: '#0d6efd',
-                    color: '#fff',
-                    cursor: (showInputUI || plotReady) ? 'pointer' : 'not-allowed',
-                    fontWeight: 600,
-                  }}
-                  disabled={!(showInputUI || plotReady)}
-                >
-                  Plot Curve(s)
-                </button>
-                <button
-                  onClick={onPauseToggle}
-                  className="btn"
-                  aria-pressed={paused}
-                  disabled={!plotReady}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 8,
-                    border: 'none',
-                    background: plotReady ? (paused ? '#28a745' : '#ffc107') : '#94a3b8',
-                    color: '#fff',
-                    cursor: plotReady ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  {paused ? 'Start / Resume' : 'Pause'}
-                </button>
+                {showInputUI && (
+                  <button
+                    onClick={onPlot}
+                    className="btn"
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: '#0d6efd',
+                      color: '#fff',
+                      cursor: plotButtonEnabled ? 'pointer' : 'not-allowed',
+                      fontWeight: 600,
+                      opacity: plotReady ? 0.5 : 1,
+                    }}
+                    disabled={!plotButtonEnabled || plotReady}
+                  >
+                    Plot Curve(s)
+                  </button>
+                )}
+                {plotReady && (
+                  <button
+                    onClick={onPauseToggle}
+                    className="btn"
+                    aria-pressed={paused}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: paused ? '#28a745' : '#ffc107',
+                      color: '#fff',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {paused ? 'Resume' : 'Pause'}
+                  </button>
+                )}
                 <button
                   onClick={onReset}
                   className="btn"
