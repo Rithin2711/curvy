@@ -39,13 +39,13 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // Scale constant: 1 unit (1 cm) = 37.8 pixels
   const SCALE_PX_PER_CM = 37.8;
 
-  // Refs for animation state
+  // Animation state refs
   const activeCurveIdRef = useRef(null);
   const activeOrderIndexRef = useRef(0);
-  const sRef = useRef(0); // current parameter (x) along active curve domain (in cm)
-  const dirRef = useRef(1); // move direction: forward (+x)
+  const sRef = useRef(0); // current x position along curve (in cm)
   // Speed is in cm per second
-  const speedWorldPerSecRef = useRef(30); // ~30 cm/sec = ~11.34 pixels/frame at 60fps
+  const speedWorldPerSecRef = useRef(40); // 40 cm/sec for smooth animation
+  const curveProgressRef = useRef(0); // Progress through current curve (0 to 1)
   const animationRef = useRef(0);
   const lastTsRef = useRef(0);
 
@@ -158,12 +158,13 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       activeCurveIdRef.current = first.id;
       activeOrderIndexRef.current = first.orderIndex ?? 0;
       sRef.current = sx;
-      dirRef.current = 1;
+      curveProgressRef.current = 0; // Start from beginning of curve
       isIdleAtEndRef.current = false;
     } else {
       activeCurveIdRef.current = null;
       activeOrderIndexRef.current = 0;
       sRef.current = 0;
+      curveProgressRef.current = 0;
       isIdleAtEndRef.current = true;
       startX = 0; startY = 0;
     }
@@ -256,60 +257,60 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const maxX = Number(active.max);
     const speed = speedWorldPerSecRef.current;
 
-    // If paused: hold x, recompute y to stay on curve
+    // If paused: hold position and ensure y matches curve
     if (paused) {
       let yHold = state.y;
       try { yHold = active.compiled.evaluate({ x: sRef.current }); } catch {}
       return { x: sRef.current, y: yHold };
     }
 
-    // Advance along x (world)
-    let s = sRef.current + dirRef.current * speed * dt;
+    // Update progress through current curve
+    curveProgressRef.current += (dt * speed) / Math.abs(maxX - minX);
+    
+    // Clamp progress to [0, 1]
+    curveProgressRef.current = Math.min(1, Math.max(0, curveProgressRef.current));
 
-    // Clamp within domain to avoid overshoot stopping early
-    if (s > maxX) s = maxX;
-    if (s < minX) s = minX;
+    // Linear interpolation between min and max x
+    const s = minX + (maxX - minX) * curveProgressRef.current;
+    
+    // When we reach the end of current curve
+    if (curveProgressRef.current >= 1) {
+      // Evaluate exactly at max_x for clean transition
+      let yEnd = state.y;
+      try { yEnd = active.compiled.evaluate({ x: maxX }); } catch {}
 
-    // If we reach the right bound, advance to the next curve; otherwise continue
-    if (s >= maxX) {
-      s = maxX; // ensure exact boundary
-      sRef.current = s;
-
-      // Evaluate exactly at the right boundary to avoid a visual gap
-      let yEdge = state.y;
-      try { yEdge = active.compiled.evaluate({ x: s }); } catch {}
-
-      // Record the boundary point to the path (ensures full coverage)
+      // Record end point in path
       const lastPath = pathRef.current[pathRef.current.length - 1];
-      if (!lastPath || lastPath.x !== s || lastPath.y !== yEdge) {
-        pathRef.current.push({ x: s, y: yEdge, t: performance.now() });
+      if (!lastPath || lastPath.x !== maxX || lastPath.y !== yEnd) {
+        pathRef.current.push({ x: maxX, y: yEnd, t: performance.now() });
       }
 
       const next = findNextCurveAfter(active.orderIndex ?? 0);
       if (next) {
+        // Start next curve
         const nx = Number(next.min);
         let ny = 0;
         try { ny = next.compiled.evaluate({ x: nx }); } catch { ny = next.points[0]?.y ?? 0; }
 
         activeCurveIdRef.current = next.id;
         activeOrderIndexRef.current = next.orderIndex ?? 0;
+        curveProgressRef.current = 0; // Reset progress for new curve
         sRef.current = nx;
-        dirRef.current = 1;
         isIdleAtEndRef.current = false;
 
-        // Notify parent that we finished this curve and started the next (by order index)
+        // Notify parent
         onCurveFinished && onCurveFinished((next.orderIndex ?? 0));
 
         return { x: nx, y: isFinite(ny) ? ny : 0 };
       } else {
-        // No next curve: idle at end
+        // No more curves: stop at end
         isIdleAtEndRef.current = true;
         onCurveFinished && onCurveFinished((active.orderIndex ?? 0) + 1);
-        return { x: s, y: yEdge };
+        return { x: maxX, y: yEnd };
       }
     }
 
-    // Normal movement within domain
+    // Normal movement: evaluate y at interpolated x
     let yVal = state.y;
     try {
       yVal = active.compiled.evaluate({ x: s });
@@ -614,21 +615,20 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curves, dimensions.w, dimensions.h, expressions, onComplete, onStarStats, paused]);
 
-  // Reset animation time and tiny nudge when resuming
+  // Reset animation time and progress when resuming or changing curve
   useEffect(() => {
     lastTsRef.current = 0;
     if (!paused) {
       const active = getActiveCurve();
       if (active) {
-        const tiny = 0.001;
-        const speed = speedWorldPerSecRef.current;
-        let s = sRef.current + dirRef.current * speed * tiny;
         const minX = Number(active.min);
         const maxX = Number(active.max);
-        // strict clamp to avoid overshoot on resume
-        if (s < minX) s = minX;
-        if (s > maxX) s = maxX;
-        sRef.current = s;
+        const currentX = sRef.current;
+        
+        // Calculate progress based on current position
+        curveProgressRef.current = Math.max(0, Math.min(1, 
+          (currentX - minX) / Math.max(1e-6, maxX - minX)
+        ));
       }
     }
   }, [paused]);
