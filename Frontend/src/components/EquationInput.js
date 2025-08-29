@@ -61,7 +61,7 @@ export default function EquationInput({
   return (
     <div className="equation-panel">
       <label htmlFor="equation" style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>
-        Enter equation y = f(x)
+        Enter equation y = f(x) (this segment)
       </label>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <input

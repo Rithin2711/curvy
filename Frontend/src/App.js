@@ -380,7 +380,7 @@ function App() {
                   onCurveFinished={onCurveFinished}
                 />
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  Sequencing mode: the ball follows each equation in order. When a path ends, it automatically continues to the next. Stops after the last curve.
+                  Sequencing mode: the ball follows each equation in order. When a segment ends, it automatically continues to the next. The level only completes after all stars are collected.
                 </div>
               </div>
               <div aria-live="polite" style={{ minHeight: 22, color: 'var(--text-secondary)' }}>
