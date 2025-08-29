@@ -87,8 +87,10 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const xToPx = (x) => x + w / 2;
     const yToPx = (y) => h / 2 - y;
 
-    // Sample spacing in world units; dense for smooth animation across full width
-    const stepWorld = Math.max(0.5, Math.floor(w / 600)); // more dense than before
+    // Sample spacing in world units; dense for smooth animation across full width.
+    // Use a small fixed step to make sure sampling covers the whole domain consistently
+    // independent of width rounding.
+    const stepWorld = Math.max(0.5, Math.min(2, w / 600)); // dynamic but bounded for smoothness
 
     // Full visible world domain centered around 0
     const visibleMin = -w / 2;
@@ -110,7 +112,10 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       const xMax = Math.min(visibleMax, domMax);
 
       if (item.compiled && xMax > xMin) {
-        for (let x = xMin; x <= xMax; x += stepWorld) {
+        // Ensure stable inclusive loop by computing steps count
+        const steps = Math.max(1, Math.ceil((xMax - xMin) / stepWorld));
+        for (let i = 0; i <= steps; i++) {
+          const x = i === steps ? xMax : (xMin + i * ((xMax - xMin) / steps));
           try {
             const y = item.compiled.evaluate({ x });
             if (isFinite(y)) {
@@ -120,16 +125,6 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
             // ignore point
           }
         }
-        // Ensure inclusion of right bound for full traversal coverage
-        try {
-          const yEnd = item.compiled.evaluate({ x: xMax });
-          if (isFinite(yEnd)) {
-            const last = pts[pts.length - 1];
-            if (!last || last.x !== xMax) {
-              pts.push({ x: xMax, y: yEnd, px: xToPx(xMax), py: yToPx(yEnd) });
-            }
-          }
-        } catch {}
       }
 
       allCurves.push({
@@ -254,24 +249,37 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     // If we reach the right bound, advance to the next curve; otherwise continue
     if (s >= maxX) {
+      s = maxX; // ensure exact boundary
       sRef.current = s;
+
+      // Evaluate exactly at the right boundary to avoid a visual gap
       let yEdge = state.y;
       try { yEdge = active.compiled.evaluate({ x: s }); } catch {}
-      pathRef.current.push({ x: s, y: yEdge, t: performance.now() });
+
+      // Record the boundary point to the path (ensures full coverage)
+      const lastPath = pathRef.current[pathRef.current.length - 1];
+      if (!lastPath || lastPath.x !== s || lastPath.y !== yEdge) {
+        pathRef.current.push({ x: s, y: yEdge, t: performance.now() });
+      }
 
       const next = findNextCurveAfter(active.orderIndex ?? 0);
       if (next) {
-        const nx = next.min;
+        const nx = Number(next.min);
         let ny = 0;
         try { ny = next.compiled.evaluate({ x: nx }); } catch { ny = next.points[0]?.y ?? 0; }
+
         activeCurveIdRef.current = next.id;
         activeOrderIndexRef.current = next.orderIndex ?? 0;
         sRef.current = nx;
         dirRef.current = 1;
         isIdleAtEndRef.current = false;
+
+        // Notify parent that we finished this curve and started the next (by order index)
         onCurveFinished && onCurveFinished((next.orderIndex ?? 0));
+
         return { x: nx, y: isFinite(ny) ? ny : 0 };
       } else {
+        // No next curve: idle at end
         isIdleAtEndRef.current = true;
         onCurveFinished && onCurveFinished((active.orderIndex ?? 0) + 1);
         return { x: s, y: yEdge };
@@ -548,7 +556,11 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         const tiny = 0.001;
         const speed = speedWorldPerSecRef.current;
         let s = sRef.current + dirRef.current * speed * tiny;
-        s = Math.min(Math.max(s, Number(active.min)), Number(active.max));
+        const minX = Number(active.min);
+        const maxX = Number(active.max);
+        // strict clamp to avoid overshoot on resume
+        if (s < minX) s = minX;
+        if (s > maxX) s = maxX;
         sRef.current = s;
       }
     }
