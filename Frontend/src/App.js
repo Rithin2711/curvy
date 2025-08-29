@@ -11,8 +11,8 @@ function App() {
   /**
    * This is the main Gravity Curve app. It renders:
    * - Theme toggle
-   * - Multiple equation inputs (sequence)
-   * - Unified canvas for graph + gameplay rendering curves followed in sequence
+   * - (Gated) equation inputs appear only after user clicks "Start plotting"
+   * - Unified canvas for graph + gameplay
    * - Pause/Resume/Reset controls and HUD
    * - Leaderboard view
    * It integrates with backend APIs via the services/api module.
@@ -39,6 +39,7 @@ function App() {
   // New: input/plot gating + random start coordinate
   const [plotReady, setPlotReady] = useState(false);
   const [startCoord, setStartCoord] = useState(null); // {x,y} in world units; displayed above canvas
+  const [showInputUI, setShowInputUI] = useState(false); // controls visibility of equation inputs
 
   const api = useMemo(() => createApi(), []);
 
@@ -125,8 +126,11 @@ function App() {
     setActiveIndex(0);
     setShowEndModal(false);
     setEndResult({ success: false, collected: 0, total: 0 });
-    // Preserve equations but require user to re-apply/confirm before plotting
+
+    // Reset gating: hide inputs/UI and clear plot readiness
     setPlotReady(false);
+    setShowInputUI(false);
+
     // Generate a new random start coordinate; GameCanvas will fall back if not valid until plot
     setStartCoord(null); // will regenerate when user plots again
   };
@@ -279,105 +283,136 @@ function App() {
                 </button>
               </div>
 
-              {/* Multiple equations input list */}
-              <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ fontWeight: 600 }}>Equation sequence (y = f(x))</div>
+              {/* Gate: initially show only a button to start plotting; inputs are hidden */}
+              {!showInputUI && !plotReady && (
+                <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                    Click below to start plotting a curve
+                  </div>
                   <button
-                    onClick={addEquation}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: 6,
-                      border: '1px solid var(--border-color)',
-                      background: 'transparent',
-                      cursor: 'pointer',
-                      fontWeight: 600,
+                    onClick={() => {
+                      setShowInputUI(true);
+                      setStatusMsg('Enter an equation and domain, then click Plot to render the curve.');
+                      setPaused(true);
                     }}
-                    aria-label="Add equation"
+                    style={{
+                      padding: '12px 16px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: '#0d6efd',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                      width: 'fit-content'
+                    }}
+                    aria-label="Start plotting"
                   >
-                    + Add
+                    Start plotting
                   </button>
                 </div>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  {equations.map((eq, idx) => (
-                    <div key={eq.id} style={{ display: 'grid', gap: 8 }}>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <div
-                          style={{
-                            width: 12,
-                            height: 12,
-                            borderRadius: 2,
-                            background: eq.color,
-                            border: '1px solid rgba(0,0,0,0.1)'
-                          }}
-                          aria-label={`Equation ${idx + 1} color`}
-                          title={eq.color}
-                        />
-                        <div style={{ fontWeight: 600, fontSize: 12 }}>
-                          #{idx + 1} {idx === activeIndex ? '(active)' : ''}
+              )}
+
+              {/* Equation inputs only visible after user clicks "Start plotting" */}
+              {(showInputUI || plotReady) && (
+                <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontWeight: 600 }}>Equation sequence (y = f(x))</div>
+                    <button
+                      onClick={addEquation}
+                      style={{
+                        padding: '8px 12px',
+                        borderRadius: 6,
+                        border: '1px solid var(--border-color)',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                      }}
+                      aria-label="Add equation"
+                    >
+                      + Add
+                    </button>
+                  </div>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {equations.map((eq, idx) => (
+                      <div key={eq.id} style={{ display: 'grid', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <div
+                            style={{
+                              width: 12,
+                              height: 12,
+                              borderRadius: 2,
+                              background: eq.color,
+                              border: '1px solid rgba(0,0,0,0.1)'
+                            }}
+                            aria-label={`Equation ${idx + 1} color`}
+                            title={eq.color}
+                          />
+                          <div style={{ fontWeight: 600, fontSize: 12 }}>
+                            #{idx + 1} {idx === activeIndex ? '(active)' : ''}
+                          </div>
+                          <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                            <button
+                              onClick={() => moveEquation(idx, idx - 1)}
+                              disabled={idx === 0}
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 6,
+                                border: '1px solid var(--border-color)',
+                                background: 'transparent',
+                                cursor: idx === 0 ? 'not-allowed' : 'pointer',
+                                fontSize: 12
+                              }}
+                              aria-label="Move up"
+                            >
+                              ↑
+                            </button>
+                            <button
+                              onClick={() => moveEquation(idx, idx + 1)}
+                              disabled={idx === equations.length - 1}
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 6,
+                                border: '1px solid var(--border-color)',
+                                background: 'transparent',
+                                cursor: idx === equations.length - 1 ? 'not-allowed' : 'pointer',
+                                fontSize: 12
+                              }}
+                              aria-label="Move down"
+                            >
+                              ↓
+                            </button>
+                            <button
+                              onClick={() => removeEquation(eq.id)}
+                              disabled={equations.length <= 1}
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 6,
+                                border: '1px solid var(--border-color)',
+                                background: 'transparent',
+                                cursor: equations.length <= 1 ? 'not-allowed' : 'pointer',
+                                fontSize: 12,
+                                color: '#dc3545'
+                              }}
+                              aria-label="Remove equation"
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </div>
-                        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-                          <button
-                            onClick={() => moveEquation(idx, idx - 1)}
-                            disabled={idx === 0}
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 6,
-                              border: '1px solid var(--border-color)',
-                              background: 'transparent',
-                              cursor: idx === 0 ? 'not-allowed' : 'pointer',
-                              fontSize: 12
-                            }}
-                            aria-label="Move up"
-                          >
-                            ↑
-                          </button>
-                          <button
-                            onClick={() => moveEquation(idx, idx + 1)}
-                            disabled={idx === equations.length - 1}
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 6,
-                              border: '1px solid var(--border-color)',
-                              background: 'transparent',
-                              cursor: idx === equations.length - 1 ? 'not-allowed' : 'pointer',
-                              fontSize: 12
-                            }}
-                            aria-label="Move down"
-                          >
-                            ↓
-                          </button>
-                          <button
-                            onClick={() => removeEquation(eq.id)}
-                            disabled={equations.length <= 1}
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 6,
-                              border: '1px solid var(--border-color)',
-                              background: 'transparent',
-                              cursor: equations.length <= 1 ? 'not-allowed' : 'pointer',
-                              fontSize: 12,
-                              color: '#dc3545'
-                            }}
-                            aria-label="Remove equation"
-                          >
-                            Remove
-                          </button>
+                        <div style={{ flex: 1 }}>
+                          <EquationInput
+                            onApply={(payload) => applyEquationAt(idx, payload)}
+                            initialValue={eq.expr}
+                            initialMin={eq.min ?? -200}
+                            initialMax={eq.max ?? 200}
+                          />
                         </div>
+                        <div style={{ height: 1, background: 'var(--border-color)' }} />
                       </div>
-                      <div style={{ flex: 1 }}>
-                        <EquationInput
-                          onApply={(payload) => applyEquationAt(idx, payload)}
-                          initialValue={eq.expr}
-                          initialMin={eq.min ?? -200}
-                          initialMax={eq.max ?? 200}
-                        />
-                      </div>
-                      <div style={{ height: 1, background: 'var(--border-color)' }} />
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button
@@ -389,9 +424,10 @@ function App() {
                     border: 'none',
                     background: '#0d6efd',
                     color: '#fff',
-                    cursor: 'pointer',
+                    cursor: (showInputUI || plotReady) ? 'pointer' : 'not-allowed',
                     fontWeight: 600,
                   }}
+                  disabled={!(showInputUI || plotReady)}
                 >
                   Plot Curve(s)
                 </button>
@@ -445,7 +481,8 @@ function App() {
               >
                 <GameCanvas
                   key={resetSeed}
-                  expressions={orderedExpressions}
+                  // When not plotReady, pass empty expressions so canvas shows only ball + stars
+                  expressions={plotReady ? orderedExpressions : []}
                   paused={paused || !plotReady}
                   onStarStats={onStarStats}
                   onComplete={onGameComplete}
