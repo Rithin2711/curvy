@@ -14,7 +14,7 @@ const math = create(all, {});
  *
  * Fix: Ensure movement continues across the entire valid domain for each curve (no premature stop).
  */
-export default function GameCanvas({ expressions = [], paused, onStarStats, onComplete, onCurveFinished }) {
+export default function GameCanvas({ expressions = [], paused, onStarStats, onComplete, onCurveFinished, startCoord = null, onStartEvaluated }) {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const [dimensions, setDimensions] = useState({ w: 800, h: 420 });
@@ -88,9 +88,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const yToPx = (y) => h / 2 - y;
 
     // Sample spacing in world units; dense for smooth animation across full width.
-    // Use a small fixed step to make sure sampling covers the whole domain consistently
-    // independent of width rounding.
-    const stepWorld = Math.max(0.5, Math.min(2, w / 600)); // dynamic but bounded for smoothness
+    const stepWorld = Math.max(0.5, Math.min(2, w / 600)); // dynamic but bounded
 
     // Full visible world domain centered around 0
     const visibleMin = -w / 2;
@@ -122,7 +120,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
               pts.push({ x, y, px: xToPx(x), py: yToPx(y) });
             }
           } catch {
-            // ignore point
+            // ignore invalid point
           }
         }
       }
@@ -139,19 +137,24 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       });
     });
 
-    // Initialize to the left bound of the first valid curve for continuous traversal
+    // Initialize start position:
+    // If a startCoord.x is provided and lies within the first valid curve's [min,max], use it.
+    // Otherwise, fall back to the left bound of the first valid curve.
     const first = allCurves.find((c) => c.compiled && c.points.length > 0 && isFinite(c.min) && isFinite(c.max));
     let startX = 0, startY = 0;
     if (first) {
-      const startXw = first.min;
+      let sx = first.min;
+      if (startCoord && isFinite(startCoord.x) && startCoord.x >= first.min && startCoord.x <= first.max) {
+        sx = Number(startCoord.x);
+      }
       let y0 = 0;
-      try { y0 = first.compiled.evaluate({ x: startXw }); } catch { y0 = first.points[0]?.y ?? 0; }
-      startX = startXw;
+      try { y0 = first.compiled.evaluate({ x: sx }); } catch { y0 = first.points[0]?.y ?? 0; }
+      startX = sx;
       startY = isFinite(y0) ? y0 : 0;
 
       activeCurveIdRef.current = first.id;
       activeOrderIndexRef.current = first.orderIndex ?? 0;
-      sRef.current = startXw;
+      sRef.current = sx;
       dirRef.current = 1;
       isIdleAtEndRef.current = false;
     } else {
@@ -165,13 +168,20 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     setCurves(allCurves);
     setState({ x: startX, y: startY });
 
+    // Inform parent about evaluated start coordinate if available
+    if (typeof onStartEvaluated === 'function') {
+      try {
+        onStartEvaluated({ x: startX, y: startY });
+      } catch {}
+    }
+
     // Reset trace buffer and stars
     pathRef.current = [{ x: startX, y: startY, t: performance.now() }];
     starsRef.current = [];
     collectedRef.current = [];
     onStarStats && onStarStats({ collected: 0, total: 0 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compiledList, dimensions.w, dimensions.h, expressions]);
+  }, [compiledList, dimensions.w, dimensions.h, expressions, startCoord]);
 
   // Helpers
   const worldToCanvas = (w, h, x, y) => ({ px: x + w / 2, py: h / 2 - y });

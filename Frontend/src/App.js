@@ -36,6 +36,10 @@ function App() {
   const [showEndModal, setShowEndModal] = useState(false);
   const [endResult, setEndResult] = useState({ success: false, collected: 0, total: 0 });
 
+  // New: input/plot gating + random start coordinate
+  const [plotReady, setPlotReady] = useState(false);
+  const [startCoord, setStartCoord] = useState(null); // {x,y} in world units; displayed above canvas
+
   const api = useMemo(() => createApi(), []);
 
   useEffect(() => {
@@ -70,6 +74,14 @@ function App() {
       return next;
     });
     setMoves((m) => (!paused ? m + 1 : m));
+
+    // After applying an equation, re-check if we have all inputs needed to plot
+    setPlotReady(checkPlotInputs([...equations].map((e, i) => i === index ? {
+      ...e,
+      expr: typeof expr === 'string' ? expr : e.expr,
+      min: isFinite(min) ? Number(min) : e.min,
+      max: isFinite(max) ? Number(max) : e.max,
+    } : e)));
   }
 
   const addEquation = () => {
@@ -113,6 +125,10 @@ function App() {
     setActiveIndex(0);
     setShowEndModal(false);
     setEndResult({ success: false, collected: 0, total: 0 });
+    // Preserve equations but require user to re-apply/confirm before plotting
+    setPlotReady(false);
+    // Generate a new random start coordinate; GameCanvas will fall back if not valid until plot
+    setStartCoord(null); // will regenerate when user plots again
   };
 
   const onGameComplete = async (score) => {
@@ -158,6 +174,38 @@ function App() {
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
+
+  // Helper to validate required inputs for plotting
+  function checkPlotInputs(eqList) {
+    const hasAll = (eqList || []).every((e) => {
+      const hasExpr = typeof e.expr === 'string' && e.expr.trim().length > 0;
+      const hasRange = isFinite(e.min) && isFinite(e.max) && Number(e.min) < Number(e.max);
+      return hasExpr && hasRange;
+    });
+    return hasAll && (eqList || []).length > 0;
+  }
+
+  // Prepare to plot: validate inputs and set random start
+  function onPlot() {
+    const ok = checkPlotInputs(equations);
+    if (!ok) {
+      setStatusMsg('Please enter an equation and valid min/max range for all equations before plotting.');
+      setPlotReady(false);
+      return;
+    }
+    // Create a random starting point in world units which will be used by GameCanvas.
+    // We select based on the first equation's [min, max] domain for clarity.
+    const first = equations[0];
+    const min = Number(first.min), max = Number(first.max);
+    const rx = min + Math.random() * (max - min);
+    // y is unknown to App; GameCanvas computes y based on the active curve. We store only x here.
+    setStartCoord({ x: rx }); // y will be computed and displayed by GameCanvas if needed
+    setPlotReady(true);
+    setPaused(true); // start in paused state until user presses Start/Resume
+    setStatusMsg(`Random starting x selected at ${rx.toFixed(2)}. Press Start to begin.`);
+    // bump seed to force canvas rebuild with new startCoord
+    setResetSeed((s) => s + 1);
+  }
 
   // Derive expressions with order based on current ordering
   const orderedExpressions = equations.map((e, idx) => ({ ...e, orderIndex: idx }));
@@ -333,16 +381,32 @@ function App() {
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button
-                  onClick={onPauseToggle}
+                  onClick={onPlot}
                   className="btn"
-                  aria-pressed={paused}
                   style={{
                     padding: '10px 14px',
                     borderRadius: 8,
                     border: 'none',
-                    background: paused ? '#28a745' : '#ffc107',
+                    background: '#0d6efd',
                     color: '#fff',
                     cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  Plot Curve(s)
+                </button>
+                <button
+                  onClick={onPauseToggle}
+                  className="btn"
+                  aria-pressed={paused}
+                  disabled={!plotReady}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: plotReady ? (paused ? '#28a745' : '#ffc107') : '#94a3b8',
+                    color: '#fff',
+                    cursor: plotReady ? 'pointer' : 'not-allowed',
                   }}
                 >
                   {paused ? 'Start / Resume' : 'Pause'}
@@ -367,6 +431,14 @@ function App() {
                 </div>
               </div>
 
+              {/* Display chosen random start coordinate above the canvas */}
+              {plotReady && startCoord && (
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  Random starting coordinate: x = {Number(startCoord.x).toFixed(2)}
+                  {isFinite(startCoord.y) ? `, y = ${Number(startCoord.y).toFixed(2)}` : ' (y computed from curve)'}
+                </div>
+              )}
+
               <div
                 className="panels"
                 style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}
@@ -374,10 +446,17 @@ function App() {
                 <GameCanvas
                   key={resetSeed}
                   expressions={orderedExpressions}
-                  paused={paused}
+                  paused={paused || !plotReady}
                   onStarStats={onStarStats}
                   onComplete={onGameComplete}
                   onCurveFinished={onCurveFinished}
+                  startCoord={plotReady ? startCoord : null}
+                  onStartEvaluated={(pt) => {
+                    // Store evaluated y for display
+                    if (pt && isFinite(pt.x) && isFinite(pt.y)) {
+                      setStartCoord({ x: pt.x, y: pt.y });
+                    }
+                  }}
                 />
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                   Sequencing mode: the ball follows each equation in order. When a path ends, it automatically continues to the next. Stops after the last curve.

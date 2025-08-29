@@ -45,7 +45,7 @@ export default function EquationInput({
   const handleApply = () => {
     const err = validate(value);
     setError(err);
-    if (!err && range.valid) {
+    if (!err && range.valid && value.trim().length > 0) {
       // Backwards compatible: if parent expects a string, it will receive an object; all usages updated in App.
       onApply({ expr: value, min: Number(range.min), max: Number(range.max) });
     }
@@ -92,13 +92,15 @@ export default function EquationInput({
             cursor: 'pointer',
             fontWeight: 600,
           }}
+          aria-label="Apply equation and range"
+          title="Apply equation and x-range"
         >
           Apply
         </button>
       </div>
       {error && (
         <div role="alert" style={{ color: '#dc3545', marginTop: 6, fontSize: 13 }}>
-          {error}
+          {error || 'Please enter an equation and valid min/max before applying.'}
         </div>
       )}
 
