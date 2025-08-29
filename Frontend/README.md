@@ -1,82 +1,58 @@
-# Lightweight React Template for KAVIA
+# Gravity Curve Frontend (React)
 
-This project provides a minimal React template with a clean, modern UI and minimal dependencies.
+This is the complete React-based client for Gravity Curve. It includes:
+- Mathematical equation editor (math.js syntax)
+- Real-time graph plotting and unified gameplay canvas (HTML5 Canvas)
+- Start/Pause/Resume/Reset controls
+- Ball and star objects with collection logic and path tracing
+- Score submission and Leaderboard integration with Backend API
+- Light/Dark theme toggle and responsive layout
 
-## Features
+## Quick Start
 
-- **Lightweight**: No heavy UI frameworks - uses only vanilla CSS and React
-- **Modern UI**: Clean, responsive design with KAVIA brand styling
-- **Fast**: Minimal dependencies for quick loading times
-- **Simple**: Easy to understand and modify
+1. Install dependencies:
+   - `npm install`
 
-## Getting Started
+2. Configure Backend URL:
+   - Copy `.env.example` to `.env`
+   - Set `REACT_APP_BACKEND_URL` to your Backend FastAPI URL (e.g., `http://localhost:8000`)
 
-In the project directory, you can run:
+3. Run the app:
+   - `npm start`
+   - Open http://localhost:3000 in your browser
 
-### `npm start`
+4. Run tests:
+   - `npm test`
 
-Runs the app in development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## Gameplay
 
-### `npm test`
+- Enter an equation y = f(x) (examples: `0.5*x`, `(x^2)/120`, `40*sin(x/20)`, `0.002*x^3 - 0.3*x`).
+- Set a domain [min, max] for each equation segment. Multiple equations are followed in sequence from left to right over the visible domain.
+- Use Start/Resume to move the ball, Pause to adjust equations, Reset to start over.
+- Collect all stars to complete the level. Your moves count increments when changing equations during play.
+- Submit your score automatically when all stars are collected; leaderboard updates from the backend.
 
-Launches the test runner in interactive watch mode.
+## Environment Variables
 
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-## Customization
-
-### Colors
-
-The main brand colors are defined as CSS variables in `src/App.css`:
-
-```css
-:root {
-  --kavia-orange: #E87A41;
-  --kavia-dark: #1A1A1A;
-  --text-color: #ffffff;
-  --text-secondary: rgba(255, 255, 255, 0.7);
-  --border-color: rgba(255, 255, 255, 0.1);
-}
+Create a `.env` file with:
 ```
+REACT_APP_BACKEND_URL=http://localhost:8000
+```
+The frontend uses this to call the backend:
+- POST `/api/profile` to ensure/update a profile
+- POST `/api/scores` to submit a score
+- GET `/api/leaderboard` to fetch leaderboard
 
-### Components
+## Tech
 
-This template uses pure HTML/CSS components instead of a UI framework. You can find component styles in `src/App.css`. 
+- React 18
+- math.js for expression parsing/evaluation
+- HTML5 Canvas for rendering
+- axios for API requests
 
-Common components include:
-- Buttons (`.btn`, `.btn-large`)
-- Container (`.container`)
-- Navigation (`.navbar`)
-- Typography (`.title`, `.subtitle`, `.description`)
+## Notes
 
-## Learn More
+- Public facing functions/components are documented and marked with PUBLIC_INTERFACE comments in source files.
+- The canvas renders axes, curves, ball, moving path trace with fade, and stars with small animations.
+- The ball traverses the full displayed domain for each curve to avoid premature stops.
 
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
