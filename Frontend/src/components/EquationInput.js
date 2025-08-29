@@ -10,8 +10,8 @@ const math = create(all, {});
 export default function EquationInput({
   onApply,
   initialValue = '',
-  initialMin = -200,
-  initialMax = 200,
+  initialMin = -30, // ~30cm left of origin
+  initialMax = 30,  // ~30cm right of origin
 }) {
   /**
    * Equation input allows users to enter y=f(x) and select a domain [min,max].
@@ -53,9 +53,9 @@ export default function EquationInput({
 
   const presets = [
     { label: 'Linear: 0.5x', expr: '0.5*x' },
-    { label: 'Quadratic: x^2/120', expr: '(x^2)/120' },
-    { label: 'Sine: 40*sin(x/20)', expr: '40*sin(x/20)' },
-    { label: 'Cubic: 0.002x^3-0.3x', expr: '0.002*x^3 - 0.3*x' },
+    { label: 'Quadratic: x^2/20', expr: '(x^2)/20' },
+    { label: 'Sine: 5*sin(x/3)', expr: '5*sin(x/3)' },
+    { label: 'Cubic: 0.02x^3-0.3x', expr: '0.02*x^3 - 0.3*x' },
   ];
 
   return (

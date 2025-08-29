@@ -33,16 +33,19 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // Curves, each holds sampled points and effective displayed domain (world units)
   const [curves, setCurves] = useState([]);
 
-  // Current world state of ball (world units: x and y are math-space)
+  // Current world state of ball (world units: x and y are in cm)
   const [state, setState] = useState({ x: 0, y: 0 });
+  
+  // Scale constant: 1 unit (1 cm) = 37.8 pixels
+  const SCALE_PX_PER_CM = 37.8;
 
   // Refs for animation state
   const activeCurveIdRef = useRef(null);
   const activeOrderIndexRef = useRef(0);
-  const sRef = useRef(0); // current parameter (x) along active curve domain (world units)
+  const sRef = useRef(0); // current parameter (x) along active curve domain (in cm)
   const dirRef = useRef(1); // move direction: forward (+x)
-  // Speed is in world units per second; we map world x -> canvas with x_px = x + w/2 (1 world unit == 1 canvas px)
-  const speedWorldPerSecRef = useRef(140);
+  // Speed is in cm per second
+  const speedWorldPerSecRef = useRef(30); // ~30 cm/sec = ~11.34 pixels/frame at 60fps
   const animationRef = useRef(0);
   const lastTsRef = useRef(0);
 
@@ -184,7 +187,15 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   }, [compiledList, dimensions.w, dimensions.h, expressions, startCoord]);
 
   // Helpers
-  const worldToCanvas = (w, h, x, y) => ({ px: x + w / 2, py: h / 2 - y });
+  const worldToCanvas = (w, h, x, y) => ({ 
+    px: x * SCALE_PX_PER_CM + w / 2, 
+    py: h / 2 - y * SCALE_PX_PER_CM 
+  });
+
+  const canvasToWorld = (w, h, px, py) => ({
+    x: (px - w / 2) / SCALE_PX_PER_CM,
+    y: (h / 2 - py) / SCALE_PX_PER_CM
+  });
 
   function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius, fill, stroke, collected) {
     let rot = Math.PI / 2 * 3;
@@ -337,13 +348,51 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const drawGridAndAxes = () => {
       ctx.strokeStyle = 'rgba(255,255,255,0.06)';
       ctx.lineWidth = 1;
-      for (let y = 0; y <= h; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-      for (let x = 0; x <= w; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+      
+      // Draw horizontal grid lines every 5cm
+      const yGridCm = 5;
+      const yStep = yGridCm * SCALE_PX_PER_CM;
+      for (let py = 0; py <= h; py += yStep) {
+        ctx.beginPath();
+        ctx.moveTo(0, py);
+        ctx.lineTo(w, py);
+        ctx.stroke();
+      }
+      
+      // Draw vertical grid lines every 5cm
+      const xGridCm = 5;
+      const xStep = xGridCm * SCALE_PX_PER_CM;
+      for (let px = 0; px <= w; px += xStep) {
+        ctx.beginPath();
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, h);
+        ctx.stroke();
+      }
 
+      // Draw axes
       ctx.strokeStyle = 'rgba(97,218,251,0.6)';
       ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(0, h/2); ctx.lineTo(w, h/2); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(w/2, 0); ctx.lineTo(w/2, h); ctx.stroke();
+
+      // Add axis labels showing cm units
+      ctx.font = '10px system-ui';
+      ctx.fillStyle = 'rgba(97,218,251,0.6)';
+      const centerWorld = canvasToWorld(w, h, w/2, h/2);
+      
+      // X-axis labels
+      for (let x = Math.ceil(centerWorld.x - w/(2*SCALE_PX_PER_CM)); x <= centerWorld.x + w/(2*SCALE_PX_PER_CM); x += xGridCm) {
+        if (x === 0) continue; // Skip 0 to avoid cluttering origin
+        const {px} = worldToCanvas(w, h, x, 0);
+        ctx.fillText(`${x}cm`, px - 14, h/2 + 16);
+      }
+      
+      // Y-axis labels
+      for (let y = Math.ceil(centerWorld.y - h/(2*SCALE_PX_PER_CM)); y <= centerWorld.y + h/(2*SCALE_PX_PER_CM); y += yGridCm) {
+        if (y === 0) continue; // Skip 0 to avoid cluttering origin
+        const {py} = worldToCanvas(w, h, 0, y);
+        ctx.fillText(`${y}cm`, w/2 + 8, py + 4);
+      }
     };
 
     const drawCurves = () => {
@@ -387,11 +436,12 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     const drawBall = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
+      const ballRadiusPx = 0.6 * SCALE_PX_PER_CM; // 0.6cm radius = ~22.7px
       ctx.save();
       ctx.shadowColor = '#7ee0ff';
-      ctx.shadowBlur = 12;
+      ctx.shadowBlur = ballRadiusPx;
       ctx.beginPath();
-      ctx.arc(px, py, 12, 0, Math.PI * 2);
+      ctx.arc(px, py, ballRadiusPx, 0, Math.PI * 2);
       ctx.fillStyle = '#22d3ee';
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
@@ -484,13 +534,18 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       }
     };
 
+    // Constants for physical dimensions
+    const STAR_RADIUS_CM = 0.8; // Star radius in cm
+    const BALL_RADIUS_CM = 0.6; // Ball radius in cm
+
     const checkAndCollectStars = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
       let newly = 0;
       starsRef.current.forEach((s, i) => {
         if (!collectedRef.current[i]) {
           const d = Math.hypot(px - s.x, py - s.y);
-          if (d <= s.r + 12) {
+          const collisionRadiusPx = (STAR_RADIUS_CM + BALL_RADIUS_CM) * SCALE_PX_PER_CM; // Star radius + ball radius in pixels
+          if (d <= collisionRadiusPx) {
             collectedRef.current[i] = true;
             newly++;
             triggerStarPop(s.id);
@@ -580,12 +635,14 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   function generateStarsForCurves(w, h, curvesIn) {
     /**
      * Place stars along or slightly offset from the visible curves.
-     * Ensures distribution across the full displayed domain [-w/2, w/2].
+     * Coordinates are in cm units, converted to pixels for display.
      * Returns array of { id, x, y, r } in CANVAS coordinates.
      */
     const result = [];
     let id = 0;
-    const offset = 16;
+    const starOffsetCm = 2; // ~2cm offset from curve
+    const starRadiusCm = 0.8; // ~0.8cm radius = ~30px
+    const starRadiusPx = starRadiusCm * SCALE_PX_PER_CM;
     const targetCount = 5;
     const usableCurves = (curvesIn || []).filter(c => c.points && c.points.length > 10 && isFinite(c.min) && isFinite(c.max));
     if (usableCurves.length === 0) return result;
@@ -605,8 +662,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         const nx = -dy / len;
         const ny = dx / len;
         const dir = (k % 2 === 0) ? 1 : -1;
-        const cx = p.px + dir * offset * nx;
-        const cy = p.py + dir * offset * ny;
+        const offsetPx = starOffsetCm * SCALE_PX_PER_CM;
+        const cx = p.px + dir * offsetPx * nx;
+        const cy = p.py + dir * offsetPx * ny;
         result.push({ id: id++, x: cx, y: cy, r: 12 });
       }
     });
