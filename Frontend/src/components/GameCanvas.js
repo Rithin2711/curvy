@@ -634,17 +634,25 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // PUBLIC_INTERFACE
   function generateStarsForCurves(w, h) {
     /**
-     * Generate stars with random placement across the game area while avoiding overlap
-     * Stars are placed within visible bounds and maintain minimum separation
+     * Generate exactly 5 stars with random placement across the game area while avoiding overlap
+     * Stars are placed within visible bounds and maintain minimum separation based on real-world scale
      * Returns array of { id, x, y, r } in CANVAS coordinates
      */
+    const REQUIRED_STARS = 5;
     const result = [];
     let id = 0;
+    
+    // Real-world dimensions (1 unit = 1 cm)
     const starRadiusCm = 0.8; // Star radius in cm
     const starRadiusPx = starRadiusCm * SCALE_PX_PER_CM;
-    const targetCount = 5; // Target number of stars to generate
-    const minDistancePx = 3 * starRadiusPx; // Minimum distance between stars
-    const safetyMarginPx = starRadiusPx * 2; // Prevent stars too close to edges
+    const ballRadiusCm = 0.4; // Ball radius in cm
+    
+    // Minimum separation between stars (in pixels)
+    // Use 4x star radius to ensure good spacing
+    const minDistancePx = 4 * starRadiusPx;
+    
+    // Safety margin from edges (3x star radius)
+    const safetyMarginPx = 3 * starRadiusPx;
     
     // Define placement bounds in pixels (inset from edges)
     const bounds = {
@@ -654,39 +662,93 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       maxY: h - safetyMarginPx
     };
 
-    const tryGeneratePosition = () => {
-      // Generate random position within bounds
-      const x = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
-      const y = bounds.minY + Math.random() * (bounds.maxY - bounds.minY);
+    const isValidPosition = (x, y) => {
+      // Check bounds
+      if (x < bounds.minX || x > bounds.maxX || y < bounds.minY || y > bounds.maxY) {
+        return false;
+      }
       
-      // Check if this position overlaps with any existing stars
+      // Check separation from other stars
       for (const star of result) {
         const dx = x - star.x;
         const dy = y - star.y;
         const distance = Math.hypot(dx, dy);
         if (distance < minDistancePx) {
-          return null;
+          return false;
         }
       }
       
-      return { x, y };
+      // Keep stars away from the horizontal center where ball typically starts
+      const centerX = w / 2;
+      const centerMargin = (starRadiusCm + ballRadiusCm) * 2 * SCALE_PX_PER_CM;
+      if (Math.abs(x - centerX) < centerMargin) {
+        return false;
+      }
+      
+      return true;
     };
 
-    // Try to place all target stars with collision avoidance
-    let attempts = 0;
-    const maxAttempts = 100;
-    
-    while (result.length < targetCount && attempts < maxAttempts) {
-      const pos = tryGeneratePosition();
+    const generateStarPosition = () => {
+      // Grid-based attempt first for better distribution
+      const gridSize = Math.floor(minDistancePx);
+      const cols = Math.floor((bounds.maxX - bounds.minX) / gridSize);
+      const rows = Math.floor((bounds.maxY - bounds.minY) / gridSize);
+      
+      // Try grid cells in random order
+      const cells = [];
+      for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rows; j++) {
+          cells.push({
+            x: bounds.minX + (i + 0.5) * gridSize,
+            y: bounds.minY + (j + 0.5) * gridSize
+          });
+        }
+      }
+      
+      // Shuffle cells
+      for (let i = cells.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [cells[i], cells[j]] = [cells[j], cells[i]];
+      }
+      
+      // Try cells with small random offset
+      for (const cell of cells) {
+        const offsetX = (Math.random() - 0.5) * gridSize * 0.8;
+        const offsetY = (Math.random() - 0.5) * gridSize * 0.8;
+        const x = cell.x + offsetX;
+        const y = cell.y + offsetY;
+        if (isValidPosition(x, y)) {
+          return { x, y };
+        }
+      }
+      
+      // Fallback to pure random if grid fails
+      const maxTries = 50;
+      for (let i = 0; i < maxTries; i++) {
+        const x = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
+        const y = bounds.minY + Math.random() * (bounds.maxY - bounds.minY);
+        if (isValidPosition(x, y)) {
+          return { x, y };
+        }
+      }
+      return null;
+    };
+
+    // Always generate exactly 5 stars
+    while (result.length < REQUIRED_STARS) {
+      const pos = generateStarPosition();
       if (pos) {
-        result.push({ 
-          id: id++, 
-          x: pos.x, 
-          y: pos.y, 
+        result.push({
+          id: id++,
+          x: pos.x,
+          y: pos.y,
           r: starRadiusPx * 0.4 // Visual radius for drawing (smaller than collision radius)
         });
+      } else {
+        // If we can't place a star, clear and try again with different random positions
+        result.length = 0;
+        id = 0;
       }
-      attempts++;
     }
 
     return result;
