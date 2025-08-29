@@ -264,25 +264,33 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       return { x: sRef.current, y: yHold };
     }
 
-    // Update progress through current curve
-    curveProgressRef.current += (dt * speed) / Math.abs(maxX - minX);
+    // Update position based on speed and curve evaluation
+    let newX = sRef.current;
     
-    // Clamp progress to [0, 1]
-    curveProgressRef.current = Math.min(1, Math.max(0, curveProgressRef.current));
+    // Calculate the step size in x based on speed and time delta
+    const dx = speed * dt;
+    
+    // Move along x-axis
+    newX = Math.min(maxX, newX + dx);
+    
+    // Evaluate y at the new x position
+    let newY = state.y;
+    try {
+      newY = active.compiled.evaluate({ x: newX });
+    } catch {
+      return { ...state };
+    }
+    if (!isFinite(newY)) return { ...state };
 
-    // Linear interpolation between min and max x
-    const s = minX + (maxX - minX) * curveProgressRef.current;
+    // Calculate progress for curve transition
+    curveProgressRef.current = (newX - minX) / (maxX - minX);
     
     // When we reach the end of current curve
-    if (curveProgressRef.current >= 1) {
-      // Evaluate exactly at max_x for clean transition
-      let yEnd = state.y;
-      try { yEnd = active.compiled.evaluate({ x: maxX }); } catch {}
-
+    if (newX >= maxX || curveProgressRef.current >= 1) {
       // Record end point in path
       const lastPath = pathRef.current[pathRef.current.length - 1];
-      if (!lastPath || lastPath.x !== maxX || lastPath.y !== yEnd) {
-        pathRef.current.push({ x: maxX, y: yEnd, t: performance.now() });
+      if (!lastPath || lastPath.x !== maxX || lastPath.y !== newY) {
+        pathRef.current.push({ x: maxX, y: newY, t: performance.now() });
       }
 
       const next = findNextCurveAfter(active.orderIndex ?? 0);
@@ -294,7 +302,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
         activeCurveIdRef.current = next.id;
         activeOrderIndexRef.current = next.orderIndex ?? 0;
-        curveProgressRef.current = 0; // Reset progress for new curve
+        curveProgressRef.current = 0;
         sRef.current = nx;
         isIdleAtEndRef.current = false;
 
@@ -306,21 +314,13 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         // No more curves: stop at end
         isIdleAtEndRef.current = true;
         onCurveFinished && onCurveFinished((active.orderIndex ?? 0) + 1);
-        return { x: maxX, y: yEnd };
+        return { x: maxX, y: newY };
       }
     }
 
-    // Normal movement: evaluate y at interpolated x
-    let yVal = state.y;
-    try {
-      yVal = active.compiled.evaluate({ x: s });
-    } catch {
-      return { ...state };
-    }
-    if (!isFinite(yVal)) return { ...state };
-
-    sRef.current = s;
-    return { x: s, y: yVal };
+    // Update current position
+    sRef.current = newX;
+    return { x: newX, y: newY };
   }
 
   // Render loop
@@ -439,7 +439,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     const drawBall = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
-      const ballRadiusPx = 0.4 * SCALE_PX_PER_CM; // 0.4cm radius = ~15.1px
+      const ballRadiusPx = 0.6 * SCALE_PX_PER_CM; // Increased to 0.6cm radius for better visibility
       ctx.save();
       ctx.shadowColor = '#7ee0ff';
       ctx.shadowBlur = ballRadiusPx;
@@ -450,6 +450,13 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       ctx.lineWidth = 2;
       ctx.fill();
       ctx.stroke();
+      
+      // Add a center dot for precise positioning feedback
+      ctx.beginPath();
+      ctx.arc(px, py, 2, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      
       ctx.restore();
     };
 
@@ -537,17 +544,23 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       }
     };
 
-    // Constants for physical dimensions
+    // Constants for physical dimensions 
     const STAR_RADIUS_CM = 0.8; // Star radius in cm
-    const BALL_RADIUS_CM = 0.4; // Ball radius in cm (reduced from 0.6)
+    const BALL_RADIUS_CM = 0.6; // Ball radius in cm (increased for better gameplay)
 
     const checkAndCollectStars = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
       let newly = 0;
+      
+      // Check collision with slightly larger detection radius
+      const collisionRadiusPx = (STAR_RADIUS_CM + BALL_RADIUS_CM) * SCALE_PX_PER_CM * 1.2; // Added 20% buffer
+      
       starsRef.current.forEach((s, i) => {
         if (!collectedRef.current[i]) {
+          // Calculate distance between ball center and star center
           const d = Math.hypot(px - s.x, py - s.y);
-          const collisionRadiusPx = (STAR_RADIUS_CM + BALL_RADIUS_CM) * SCALE_PX_PER_CM; // Star radius + ball radius in pixels
+          
+          // Check if ball overlaps with star
           if (d <= collisionRadiusPx) {
             collectedRef.current[i] = true;
             newly++;
