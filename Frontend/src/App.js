@@ -41,6 +41,7 @@ function App() {
   const [startCoord, setStartCoord] = useState(null); // {x,y} in world units; displayed above canvas
   const [showInputUI, setShowInputUI] = useState(false); // controls visibility of equation inputs
   const [plotButtonEnabled, setPlotButtonEnabled] = useState(false); // controls plot button state
+  const [gameStarted, setGameStarted] = useState(false); // controls if ball movement has started
 
   const api = useMemo(() => createApi(), []);
 
@@ -132,6 +133,7 @@ function App() {
     setPlotReady(false);
     setShowInputUI(false);
     setPlotButtonEnabled(true);
+    setGameStarted(false);
     setStartCoord(null); // will regenerate when user plots again
 
     // Reset equations to initial state
@@ -212,10 +214,11 @@ function App() {
     // y is unknown to App; GameCanvas computes y based on the active curve. We store only x here.
     setStartCoord({ x: rx }); // y will be computed and displayed by GameCanvas if needed
     setPlotReady(true);
-    setPaused(false); // Start movement immediately after plotting
+    setPaused(true); // Keep paused until Start is clicked
     setShowInputUI(false); // Hide input UI after plotting
+    setGameStarted(false); // Reset game started state
     setPlotButtonEnabled(false); // Disable plot button after successful plot
-    setStatusMsg(`Curve plotted! Ball starting at x = ${rx.toFixed(2)}. Game in progress...`);
+    setStatusMsg(`Curve plotted! Click Start to begin from x = ${rx.toFixed(2)}.`);
     
     // bump seed to force canvas rebuild with new startCoord
     setResetSeed((s) => s + 1);
@@ -444,7 +447,28 @@ function App() {
                     Plot Curve(s)
                   </button>
                 )}
-                {plotReady && (
+                {plotReady && !gameStarted && (
+                  <button
+                    onClick={() => {
+                      setGameStarted(true);
+                      setPaused(false);
+                      setStatusMsg('Game in progress! Ball is moving along the curve...');
+                    }}
+                    className="btn"
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: '#28a745',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Start
+                  </button>
+                )}
+                {plotReady && gameStarted && (
                   <button
                     onClick={onPauseToggle}
                     className="btn"
