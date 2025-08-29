@@ -1,0 +1,140 @@
+/* CSS Variables for Theme Management */
+:root {
+  /* Light theme colors */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --text-primary: #282c34;
+  --text-secondary: #61dafb;
+  --border-color: #e9ecef;
+  --button-bg: #007bff;
+  --button-text: #ffffff;
+}
+
+[data-theme="dark"] {
+  /* Dark theme colors */
+  --bg-primary: #1a1a1a;
+  --bg-secondary: #282c34;
+  --text-primary: #ffffff;
+  --text-secondary: #61dafb;
+  --border-color: #404040;
+  --button-bg: #0056b3;
+  --button-text: #ffffff;
+}
+
+.App {
+  text-align: left;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.App-header {
+  background-color: var(--bg-secondary);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  font-size: 16px;
+  color: var(--text-primary);
+  transition: background-color 0.3s ease;
+  position: relative;
+  padding-top: 60px;
+}
+
+.container .title {
+  font-size: 28px;
+  margin: 0;
+}
+.container .subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 6px 0 16px 0;
+}
+
+.App-link {
+  color: var(--text-secondary);
+  transition: color 0.3s ease;
+}
+
+.theme-toggle {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background-color: var(--button-bg);
+  color: var(--button-text);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.theme-toggle:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  opacity: 0.9;
+}
+
+.theme-toggle:active {
+  transform: translateY(0);
+}
+
+.graph-panel, .game-panel, .leaderboard-panel, .equation-panel {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.graph-canvas {
+  width: 100%;
+  height: 260px;
+}
+
+.game-canvas {
+  width: 100%;
+  height: 420px;
+  background: transparent;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  display: block;
+}
+
+.leaderboard-panel table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.leaderboard-panel th, .leaderboard-panel td {
+  border-bottom: 1px solid var(--border-color);
+  padding: 8px;
+  text-align: left;
+}
+.leaderboard-panel th {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+input[type="text"] {
+  outline: none;
+}
+
+@media (max-width: 900px) {
+  .game-canvas {
+    height: 360px;
+  }
+}
+
+/* Responsive design for mobile */
+@media (max-width: 768px) {
+  .theme-toggle {
+    top: 10px;
+    right: 10px;
+    padding: 8px 16px;
+    font-size: 12px;
+  }
+}

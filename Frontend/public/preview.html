@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Preview - Gravity Curve</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #0b0d14;
+      color: #e5e7eb;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    header {
+      padding: 10px 14px;
+      background: #111827;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .status {
+      margin-left: auto;
+      opacity: 0.8;
+      font-size: 12px;
+    }
+    .container {
+      padding: 12px;
+      height: calc(100% - 54px);
+      box-sizing: border-box;
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .log {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      white-space: pre-line;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Preview Runner</strong>
+    <span class="status" id="status">Initializing…</span>
+  </header>
+  <div class="container">
+    <iframe id="preview-frame" src="/"></iframe>
+    <div id="log" class="log" aria-live="polite"></div>
+  </div>
+
+  <script>
+    (function () {
+      const iframe = document.getElementById('preview-frame');
+      const statusEl = document.getElementById('status');
+      const logEl = document.getElementById('log');
+
+      function log(msg) {
+        if (!logEl) return;
+        const ts = new Date().toISOString();
+        logEl.textContent += `[${ts}] ${msg}\n`;
+      }
+
+      // Robustly get the iframe's document if available
+      function getIframeDocument(ifr) {
+        try {
+          return ifr.contentDocument || (ifr.contentWindow && ifr.contentWindow.document) || null;
+        } catch (e) {
+          // Cross-origin or not ready yet
+          return null;
+        }
+      }
+
+      // Inject a script element into the iframe safely
+      function safeInjectScript(ifr, opts) {
+        return new Promise((resolve, reject) => {
+          const { code, src, async = true, defer = true } = opts || {};
+          const maxWaitMs = 4000;
+          const start = Date.now();
+
+          function tryInject() {
+            const doc = getIframeDocument(ifr);
+            if (!doc) {
+              if (Date.now() - start < maxWaitMs) {
+                return setTimeout(tryInject, 50);
+              }
+              return reject(new Error('Iframe document not available'));
+            }
+
+            // Ensure we have a head; if not, try to create one on HTML document
+            let target = doc.head;
+            if (!target) {
+              // If documentElement exists, create a head if DOM is HTML
+              if (doc.documentElement && doc.documentElement.nodeName === 'HTML') {
+                target = doc.createElement('head');
+                doc.documentElement.insertBefore(target, doc.body || null);
+              }
+            }
+
+            if (!target) {
+              if (Date.now() - start < maxWaitMs) {
+                return setTimeout(tryInject, 50);
+              }
+              return reject(new Error('Iframe head element not available'));
+            }
+
+            const s = doc.createElement('script');
+            s.async = !!async;
+            s.defer = !!defer;
+
+            if (src) {
+              s.src = src;
+              s.onload = () => resolve(true);
+              s.onerror = (e) => reject(new Error('Failed to load script src: ' + src));
+              target.appendChild(s);
+              return;
+            }
+
+            if (code) {
+              s.type = 'text/javascript';
+              s.textContent = code;
+              target.appendChild(s);
+              return resolve(true);
+            }
+
+            return reject(new Error('Neither code nor src provided for script injection'));
+          }
+
+          tryInject();
+        });
+      }
+
+      // Waits until iframe is in a usable state (document + readyState != 'loading')
+      function waitForIframeReady(ifr, timeoutMs = 5000) {
+        return new Promise((resolve, reject) => {
+          const start = Date.now();
+
+          function check() {
+            const doc = getIframeDocument(ifr);
+            if (doc && doc.readyState && doc.readyState !== 'loading') {
+              return resolve(true);
+            }
+            if (Date.now() - start > timeoutMs) {
+              return reject(new Error('Timed out waiting for iframe to be ready'));
+            }
+            setTimeout(check, 50);
+          }
+
+          // If iframe already loaded, resolve quickly
+          const doc = getIframeDocument(ifr);
+          if (doc && doc.readyState && doc.readyState !== 'loading') {
+            return resolve(true);
+          }
+
+          // Also listen to iframe load event as an additional signal
+          function onLoad() {
+            resolve(true);
+            ifr.removeEventListener('load', onLoad);
+          }
+          ifr.addEventListener('load', onLoad);
+
+          check();
+        });
+      }
+
+      async function boot() {
+        statusEl.textContent = 'Waiting for iframe…';
+        try {
+          await waitForIframeReady(iframe, 8000);
+        } catch (e) {
+          log('Iframe readiness wait error: ' + (e && e.message));
+          // Continue anyway; safeInjectScript will retry
+        }
+
+        statusEl.textContent = 'Injecting helpers…';
+        try {
+          // Example: inject a simple helper script for debugging
+          await safeInjectScript(iframe, {
+            code: `
+              (function(){
+                try {
+                  window.__previewInjected = true;
+                  console.log('[Preview] Helper injected');
+                } catch (e) {
+                  console.warn('[Preview] injection error', e);
+                }
+              })();
+            `,
+            async: false,
+            defer: false
+          });
+          statusEl.textContent = 'Helpers injected';
+          log('Helpers injected successfully.');
+        } catch (err) {
+          statusEl.textContent = 'Injection failed';
+          console.error('Failed to inject script into iframe:', err);
+          log('Failed to inject script into iframe: ' + (err && err.message));
+        }
+      }
+
+      // Kick off when the top-level document is ready
+      if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        setTimeout(boot, 0);
+      } else {
+        window.addEventListener('DOMContentLoaded', boot, { once: true });
+      }
+    })();
+  </script>
+</body>
+</html>
