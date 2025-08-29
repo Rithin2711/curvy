@@ -178,11 +178,13 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       } catch {}
     }
 
-    // Reset trace buffer and stars
+    // Reset trace buffer only, preserve stars
     pathRef.current = [{ x: startX, y: startY, t: performance.now() }];
-    starsRef.current = [];
-    collectedRef.current = [];
-    onStarStats && onStarStats({ collected: 0, total: 0 });
+    // Reset star collection state but keep positions
+    if (starsRef.current.length > 0) {
+      collectedRef.current = starsRef.current.map(() => false);
+      onStarStats && onStarStats({ collected: 0, total: starsRef.current.length });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compiledList, dimensions.w, dimensions.h, expressions, startCoord]);
 
@@ -754,22 +756,15 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     return result;
   }
 
-  // Regenerate stars whenever curves or canvas size change
+  // Generate stars when canvas size changes or on mount, independent of curves
   useEffect(() => {
-    if (!curves || curves.length === 0) return;
     const w = dimensions.w, h = dimensions.h;
-    const stars = generateStarsForCurves(w, h, curves);
-    if (stars.length > 0) {
-      starsRef.current = stars;
-      collectedRef.current = stars.map(() => false);
-      onStarStats && onStarStats({ collected: 0, total: stars.length });
-    } else {
-      starsRef.current = [];
-      collectedRef.current = [];
-      onStarStats && onStarStats({ collected: 0, total: 0 });
-    }
+    const stars = generateStarsForCurves(w, h);
+    starsRef.current = stars;
+    collectedRef.current = stars.map(() => false);
+    onStarStats && onStarStats({ collected: 0, total: stars.length });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curves, dimensions.w, dimensions.h]);
+  }, [dimensions.w, dimensions.h]);
 
   // Initial star stats on mount
   useEffect(() => {
