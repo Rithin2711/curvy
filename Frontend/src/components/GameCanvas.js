@@ -7,12 +7,12 @@ const math = create(all, {});
  * PUBLIC_INTERFACE
  * GameCanvas renders a canvas where:
  * - The user-entered equation(s) are plotted live across the full visible width.
- * - A ball animates from the left edge to the right edge of the visible graph along y=f(x).
+ * - The ball animates strictly along the exact sampled polyline points used to draw curves.
  * - The path is traced with a fading polyline synchronized to ball movement.
  * - When a curve reaches its displayed right edge, it advances to the next curve (sequence).
  * - Stars placed anywhere on the visible curve can be collected by the ball.
  *
- * Fix: Ensure movement continues across the entire valid domain for each curve (no premature stop).
+ * Update: Ball movement now follows the discrete sampled points for plotting with uniform speed along arc length.
  */
 export default function GameCanvas({ expressions = [], paused, onStarStats, onComplete, onCurveFinished, startCoord = null, onStartEvaluated }) {
   const containerRef = useRef(null);
@@ -30,22 +30,24 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     });
   }, [expressions]);
 
-  // Curves, each holds sampled points and effective displayed domain (world units)
+  // Curves: sampled points and cumulative arc-length info
   const [curves, setCurves] = useState([]);
 
   // Current world state of ball (world units: x and y are in cm)
   const [state, setState] = useState({ x: 0, y: 0 });
-  
+
   // Scale constant: 1 unit (1 cm) = 37.8 pixels
   const SCALE_PX_PER_CM = 37.8;
 
   // Animation state refs
   const activeCurveIdRef = useRef(null);
   const activeOrderIndexRef = useRef(0);
-  const sRef = useRef(0); // current x position along curve (in cm)
-  // Speed is in cm per second
+
+  // Pointer along the active curve's sampled polyline: segment index and distance along that segment
+  const segIndexRef = useRef(0);   // integer index of current segment start point
+  const segDistRef = useRef(0);    // distance progressed along current segment (in cm)
   const speedWorldPerSecRef = useRef(40); // 40 cm/sec for smooth animation
-  const curveProgressRef = useRef(0); // Progress through current curve (0 to 1)
+  const curveProgressRef = useRef(0);     // 0..1 progress along active curve
   const animationRef = useRef(0);
   const lastTsRef = useRef(0);
 
@@ -84,18 +86,16 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const w = dimensions.w;
     const h = dimensions.h;
 
-    // mapping: world x/y to pixel:
-    // px = x + w/2
-    // py = h/2 - y
+    // mapping: world x/y to pixel for plotting of curves (historical pixels-based path)
     const xToPx = (x) => x + w / 2;
     const yToPx = (y) => h / 2 - y;
 
     // Sample spacing in world units; dense for smooth animation across full width.
     const stepWorld = Math.max(0.5, Math.min(2, w / 600)); // dynamic but bounded
 
-    // Full visible world domain centered around 0
-    const visibleMin = -w / 2;
-    const visibleMax = w / 2;
+    // Full visible world domain centered around 0 (world cm, consistent with SCALE)
+    const visibleMin = -(w / 2) / 1; // since curves' plotting used px directly, we keep same to maintain shape
+    const visibleMax = (w / 2) / 1;
 
     const sorted = [...compiledList].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
     const byId = new Map((expressions || []).map((e, idx) => [e.id, { src: e, order: e.orderIndex ?? idx }]));
@@ -104,7 +104,6 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     sorted.forEach((item) => {
       const pts = [];
       const src = byId.get(item.id)?.src;
-      // User domain intersected with visible, falling back to full visible when unspecified
       let domMin = isFinite(src?.min) ? Number(src.min) : visibleMin;
       let domMax = isFinite(src?.max) ? Number(src.max) : visibleMax;
       if (domMin > domMax) [domMin, domMax] = [domMax, domMin];
@@ -113,7 +112,6 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       const xMax = Math.min(visibleMax, domMax);
 
       if (item.compiled && xMax > xMin) {
-        // Ensure stable inclusive loop by computing steps count
         const steps = Math.max(1, Math.ceil((xMax - xMin) / stepWorld));
         for (let i = 0; i <= steps; i++) {
           const x = i === steps ? xMax : (xMin + i * ((xMax - xMin) / steps));
@@ -128,11 +126,23 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         }
       }
 
+      // Build cumulative arc lengths along the sampled polyline (world units)
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) {
+        const dx = pts[i].x - pts[i - 1].x;
+        const dy = pts[i].y - pts[i - 1].y;
+        const ds = Math.hypot(dx, dy);
+        cum.push(cum[i - 1] + ds);
+      }
+      const totalLen = cum.length > 0 ? cum[cum.length - 1] : 0;
+
       allCurves.push({
         id: item.id,
         color: item.color,
         expr: item.expr,
-        points: pts,
+        points: pts,         // in world units
+        cumLen: cum,         // cumulative arc-lengths matching points
+        totalLen,            // total arc length
         min: xMin,
         max: xMax,
         compiled: item.compiled,
@@ -140,33 +150,47 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       });
     });
 
-    // Initialize start position:
-    // If a startCoord.x is provided and lies within the first valid curve's [min,max], use it.
-    // Otherwise, fall back to the left bound of the first valid curve.
+    // Initialize starting state
     const first = allCurves.find((c) => c.compiled && c.points.length > 0 && isFinite(c.min) && isFinite(c.max));
     let startX = 0, startY = 0;
+
+    function snapToPolylineStart(curve, desiredX) {
+      // Find index of the closest point at or after desiredX for consistent start
+      if (!curve || curve.points.length === 0) return { i: 0, x: curve?.points[0]?.x ?? 0, y: curve?.points[0]?.y ?? 0 };
+      let idx = 0;
+      for (let i = 0; i < curve.points.length; i++) {
+        if (curve.points[i].x >= desiredX) { idx = i; break; }
+        idx = i; // fallback to last if all smaller
+      }
+      return { i: idx, x: curve.points[idx].x, y: curve.points[idx].y };
+    }
+
     if (first) {
       let sx = first.min;
       if (startCoord && isFinite(startCoord.x) && startCoord.x >= first.min && startCoord.x <= first.max) {
         sx = Number(startCoord.x);
       }
-      let y0 = 0;
-      try { y0 = first.compiled.evaluate({ x: sx }); } catch { y0 = first.points[0]?.y ?? 0; }
-      startX = sx;
-      startY = isFinite(y0) ? y0 : 0;
+      // Snap to the sampled polyline so ball sits exactly on drawn path
+      const snap = snapToPolylineStart(first, sx);
+      startX = snap.x;
+      startY = snap.y;
 
       activeCurveIdRef.current = first.id;
       activeOrderIndexRef.current = first.orderIndex ?? 0;
-      sRef.current = sx;
-      curveProgressRef.current = 0; // Start from beginning of curve
+
+      segIndexRef.current = Math.max(0, Math.min(snap.i, Math.max(0, first.points.length - 2)));
+      segDistRef.current = 0; // start exactly at sampled point
+      curveProgressRef.current = first.totalLen > 0 ? (first.cumLen[segIndexRef.current] / first.totalLen) : 0;
       isIdleAtEndRef.current = false;
     } else {
       activeCurveIdRef.current = null;
       activeOrderIndexRef.current = 0;
-      sRef.current = 0;
+      segIndexRef.current = 0;
+      segDistRef.current = 0;
       curveProgressRef.current = 0;
       isIdleAtEndRef.current = true;
-      startX = 0; startY = 0;
+      startX = 0;
+      startY = 0;
     }
 
     setCurves(allCurves);
@@ -190,9 +214,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   }, [compiledList, dimensions.w, dimensions.h, expressions, startCoord]);
 
   // Helpers
-  const worldToCanvas = (w, h, x, y) => ({ 
-    px: x * SCALE_PX_PER_CM + w / 2, 
-    py: h / 2 - y * SCALE_PX_PER_CM 
+  const worldToCanvas = (w, h, x, y) => ({
+    px: x * SCALE_PX_PER_CM + w / 2,
+    py: h / 2 - y * SCALE_PX_PER_CM
   });
 
   const canvasToWorld = (w, h, px, py) => ({
@@ -246,81 +270,103 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     return null;
   }
 
-  // Movement constrained to curve over full displayed domain
-  function constrainedStep(dt) {
+  // Interpolate along sampled points with uniform arc-length speed
+  function advanceAlongPolyline(dt) {
     if (isIdleAtEndRef.current) return { ...state };
-
     const active = getActiveCurve();
     if (!active) return { ...state };
 
-    const minX = Number(active.min);
-    const maxX = Number(active.max);
-    const speed = speedWorldPerSecRef.current;
-
-    // If paused: hold position and ensure y matches curve
+    // If paused, stick to current interpolated position on active segment
     if (paused) {
-      let yHold = state.y;
-      try { yHold = active.compiled.evaluate({ x: sRef.current }); } catch {}
-      return { x: sRef.current, y: yHold };
+      const i = Math.max(0, Math.min(segIndexRef.current, active.points.length - 2));
+      const p0 = active.points[i];
+      const p1 = active.points[i + 1];
+      const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1e-6;
+      const t = Math.max(0, Math.min(1, segDistRef.current / segLen));
+      const x = p0.x + (p1.x - p0.x) * t;
+      const y = p0.y + (p1.y - p0.y) * t;
+      return { x, y };
     }
 
-    // Update position based on speed and curve evaluation
-    let newX = sRef.current;
-    
-    // Calculate the step size in x based on speed and time delta
-    const dx = speed * dt;
-    
-    // Move along x-axis
-    newX = Math.min(maxX, newX + dx);
-    
-    // Evaluate y at the new x position
-    let newY = state.y;
-    try {
-      newY = active.compiled.evaluate({ x: newX });
-    } catch {
-      return { ...state };
-    }
-    if (!isFinite(newY)) return { ...state };
+    let i = Math.max(0, Math.min(segIndexRef.current, active.points.length - 2));
+    let distOnSeg = segDistRef.current;
+    let remaining = speedWorldPerSecRef.current * dt;
 
-    // Calculate progress for curve transition
-    curveProgressRef.current = (newX - minX) / (maxX - minX);
-    
-    // When we reach the end of current curve
-    if (newX >= maxX || curveProgressRef.current >= 1) {
-      // Record end point in path
+    while (remaining > 0 && i < active.points.length - 1) {
+      const p0 = active.points[i];
+      const p1 = active.points[i + 1];
+      const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+
+      // If degenerate or zero-length, skip to next segment
+      if (segLen <= 1e-9) {
+        i += 1;
+        distOnSeg = 0;
+        continue;
+      }
+
+      const segLeft = segLen - distOnSeg;
+      if (remaining < segLeft) {
+        // Advance inside this segment
+        distOnSeg += remaining;
+        remaining = 0;
+      } else {
+        // Move to next segment
+        remaining -= segLeft;
+        i += 1;
+        distOnSeg = 0;
+      }
+    }
+
+    // If we reached the end of the points for this curve, snap to end and prepare next curve
+    if (i >= active.points.length - 1) {
+      const endPt = active.points[active.points.length - 1];
+      // Push final point to path
       const lastPath = pathRef.current[pathRef.current.length - 1];
-      if (!lastPath || lastPath.x !== maxX || lastPath.y !== newY) {
-        pathRef.current.push({ x: maxX, y: newY, t: performance.now() });
+      if (!lastPath || lastPath.x !== endPt.x || lastPath.y !== endPt.y) {
+        pathRef.current.push({ x: endPt.x, y: endPt.y, t: performance.now() });
       }
 
       const next = findNextCurveAfter(active.orderIndex ?? 0);
       if (next) {
-        // Start next curve
-        const nx = Number(next.min);
-        let ny = 0;
-        try { ny = next.compiled.evaluate({ x: nx }); } catch { ny = next.points[0]?.y ?? 0; }
-
+        // Start of next curve: position at its first sampled point
         activeCurveIdRef.current = next.id;
         activeOrderIndexRef.current = next.orderIndex ?? 0;
+        segIndexRef.current = 0;
+        segDistRef.current = 0;
         curveProgressRef.current = 0;
-        sRef.current = nx;
         isIdleAtEndRef.current = false;
 
-        // Notify parent
         onCurveFinished && onCurveFinished((next.orderIndex ?? 0));
-
-        return { x: nx, y: isFinite(ny) ? ny : 0 };
+        const np0 = next.points[0];
+        return { x: np0.x, y: np0.y };
       } else {
-        // No more curves: stop at end
+        // No more curves
         isIdleAtEndRef.current = true;
         onCurveFinished && onCurveFinished((active.orderIndex ?? 0) + 1);
-        return { x: maxX, y: newY };
+        return { x: endPt.x, y: endPt.y };
       }
     }
 
-    // Update current position
-    sRef.current = newX;
-    return { x: newX, y: newY };
+    // Compute interpolated position on current segment
+    segIndexRef.current = i;
+    segDistRef.current = distOnSeg;
+
+    const p0 = active.points[i];
+    const p1 = active.points[i + 1];
+    const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1e-6;
+    const t = Math.max(0, Math.min(1, distOnSeg / segLen));
+    const x = p0.x + (p1.x - p0.x) * t;
+    const y = p0.y + (p1.y - p0.y) * t;
+
+    // Update curve progress based on arc-length proportion
+    if (active.totalLen > 0) {
+      const cumAtP0 = active.cumLen[i];
+      curveProgressRef.current = Math.max(0, Math.min(1, (cumAtP0 + distOnSeg) / active.totalLen));
+    } else {
+      curveProgressRef.current = 1;
+    }
+
+    return { x, y };
   }
 
   // Render loop
@@ -330,15 +376,6 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const ctx = canvas.getContext('2d');
     const w = dimensions.w, h = dimensions.h;
     canvas.width = w; canvas.height = h;
-
-    // Keep parameter s within active curve's displayed domain
-    const active = getActiveCurve && getActiveCurve();
-    if (active) {
-      const minX = Number(active.min);
-      const maxX = Number(active.max);
-      if (sRef.current < minX) sRef.current = minX;
-      if (sRef.current > maxX) sRef.current = maxX;
-    }
 
     const drawBackground = () => {
       const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -351,7 +388,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const drawGridAndAxes = () => {
       ctx.strokeStyle = 'rgba(255,255,255,0.06)';
       ctx.lineWidth = 1;
-      
+
       // Draw horizontal grid lines every 5cm
       const yGridCm = 5;
       const yStep = yGridCm * SCALE_PX_PER_CM;
@@ -361,7 +398,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         ctx.lineTo(w, py);
         ctx.stroke();
       }
-      
+
       // Draw vertical grid lines every 5cm
       const xGridCm = 5;
       const xStep = xGridCm * SCALE_PX_PER_CM;
@@ -382,14 +419,14 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       ctx.font = '10px system-ui';
       ctx.fillStyle = 'rgba(97,218,251,0.6)';
       const centerWorld = canvasToWorld(w, h, w/2, h/2);
-      
+
       // X-axis labels
       for (let x = Math.ceil(centerWorld.x - w/(2*SCALE_PX_PER_CM)); x <= centerWorld.x + w/(2*SCALE_PX_PER_CM); x += xGridCm) {
         if (x === 0) continue; // Skip 0 to avoid cluttering origin
         const {px} = worldToCanvas(w, h, x, 0);
         ctx.fillText(`${x}cm`, px - 14, h/2 + 16);
       }
-      
+
       // Y-axis labels
       for (let y = Math.ceil(centerWorld.y - h/(2*SCALE_PX_PER_CM)); y <= centerWorld.y + h/(2*SCALE_PX_PER_CM); y += yGridCm) {
         if (y === 0) continue; // Skip 0 to avoid cluttering origin
@@ -408,8 +445,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         ctx.beginPath();
         for (let i = 0; i < c.points.length; i++) {
           const p = c.points[i];
-          if (i === 0) ctx.moveTo(p.px, p.py);
-          else ctx.lineTo(p.px, p.py);
+          const { px, py } = worldToCanvas(w, h, p.x, p.y);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
         }
         ctx.stroke();
         ctx.globalAlpha = 1;
@@ -439,7 +477,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     const drawBall = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
-      const ballRadiusPx = 0.6 * SCALE_PX_PER_CM; // Increased to 0.6cm radius for better visibility
+      const ballRadiusPx = 0.6 * SCALE_PX_PER_CM; // 0.6cm radius
       ctx.save();
       ctx.shadowColor = '#7ee0ff';
       ctx.shadowBlur = ballRadiusPx;
@@ -450,13 +488,13 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       ctx.lineWidth = 2;
       ctx.fill();
       ctx.stroke();
-      
-      // Add a center dot for precise positioning feedback
+
+      // center dot
       ctx.beginPath();
       ctx.arc(px, py, 2, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff';
       ctx.fill();
-      
+
       ctx.restore();
     };
 
@@ -473,7 +511,10 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         ctx.strokeStyle = c.color || '#61dafb';
         ctx.lineWidth = isActive ? 2.5 : 1.5;
         ctx.globalAlpha = isActive ? 1 : 0.7;
-        ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(pad + 18, y); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(pad, y);
+        ctx.lineTo(pad + 18, y);
+        ctx.stroke();
         ctx.globalAlpha = 1;
         ctx.fillStyle = '#cbd5e1';
         const labelExpr = c.expr?.length > 30 ? c.expr.slice(0, 27) + '…' : c.expr || '(invalid)';
@@ -500,9 +541,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       } else {
         const active = getActiveCurve && getActiveCurve();
         if (active) {
-          const minX = Number(active.min);
-          const maxX = Number(active.max);
-          const t = Math.min(1, Math.max(0, (sRef.current - minX) / Math.max(1e-6, (maxX - minX))));
+          const t = Math.max(0, Math.min(1, curveProgressRef.current));
           ctx.fillStyle = '#cbd5e1';
           ctx.fillText(`Progress: ${(t * 100).toFixed(0)}%`, pad, y + 20);
         }
@@ -512,6 +551,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const triggerStarPop = (id) => {
       starAnimRef.current.phases.set(id, { t0: performance.now(), dur: 400 });
     };
+
+    const STAR_RADIUS_CM = 0.8;
+    const BALL_RADIUS_CM = 0.6;
 
     const drawStars = (nowTs) => {
       starsRef.current.forEach((s, i) => {
@@ -536,31 +578,24 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         const t = (nowTs - phase.t0) / phase.dur;
         if (t >= 1) { starAnimRef.current.phases.delete(id); continue; }
         const scale = 1 + 0.6 * Math.sin(Math.PI * t);
-        ctx.save();
-        ctx.translate(s.x, s.y);
-        ctx.scale(scale, scale);
-        drawStar(ctx, 0, 0, 5, s.r * 0.6, s.r * 0.3, 'rgba(255,209,102,0.6)', 'rgba(255,255,255,0.8)', false);
-        ctx.restore();
+        const ctx2 = ctx;
+        ctx2.save();
+        ctx2.translate(s.x, s.y);
+        ctx2.scale(scale, scale);
+        drawStar(ctx2, 0, 0, 5, s.r * 0.6, s.r * 0.3, 'rgba(255,209,102,0.6)', 'rgba(255,255,255,0.8)', false);
+        ctx2.restore();
       }
     };
 
-    // Constants for physical dimensions 
-    const STAR_RADIUS_CM = 0.8; // Star radius in cm
-    const BALL_RADIUS_CM = 0.6; // Ball radius in cm (increased for better gameplay)
-
     const checkAndCollectStars = (x, y) => {
+      // Use ball center position (world) projected to canvas pixels
       const { px, py } = worldToCanvas(w, h, x, y);
       let newly = 0;
-      
-      // Check collision with slightly larger detection radius
-      const collisionRadiusPx = (STAR_RADIUS_CM + BALL_RADIUS_CM) * SCALE_PX_PER_CM * 1.2; // Added 20% buffer
-      
+      const collisionRadiusPx = (STAR_RADIUS_CM + BALL_RADIUS_CM) * SCALE_PX_PER_CM * 1.2;
+
       starsRef.current.forEach((s, i) => {
         if (!collectedRef.current[i]) {
-          // Calculate distance between ball center and star center
           const d = Math.hypot(px - s.x, py - s.y);
-          
-          // Check if ball overlaps with star
           if (d <= collisionRadiusPx) {
             collectedRef.current[i] = true;
             newly++;
@@ -568,6 +603,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
           }
         }
       });
+
       if (newly > 0) {
         const c = collectedRef.current.filter(Boolean).length;
         onStarStats && onStarStats({ collected: c, total: collectedRef.current.length });
@@ -585,9 +621,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       lastTsRef.current = ts;
 
       const prev = { ...state };
-      const next = constrainedStep(dt);
+      const next = advanceAlongPolyline(dt);
 
-      // Trace update
+      // Trace update uses the exact world position along sampled points
       const plist = pathRef.current;
       const last = plist[plist.length - 1];
       if (!last || Math.hypot(next.x - last.x, next.y - last.y) > 0.25) {
@@ -608,12 +644,11 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       drawBall(next.x, next.y);
       drawLegend();
 
-      // Only check when moved a little to avoid duplicate triggers on pause
+      // Collision check using precise polyline-following position
       if (Math.hypot(next.x - prev.x, next.y - prev.y) > 0.01) {
         checkAndCollectStars(next.x, next.y);
       }
 
-      // Update stats when idle at end
       if (isIdleAtEndRef.current) {
         const total = (collectedRef.current || []).length;
         const got = (collectedRef.current || []).filter(Boolean).length;
@@ -625,23 +660,26 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     animationRef.current = requestAnimationFrame(raf);
     return () => cancelAnimationFrame(animationRef.current);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curves, dimensions.w, dimensions.h, expressions, onComplete, onStarStats, paused]);
 
-  // Reset animation time and progress when resuming or changing curve
+  // Reset animation timing and compute progress when resuming
   useEffect(() => {
     lastTsRef.current = 0;
     if (!paused) {
       const active = getActiveCurve();
       if (active) {
-        const minX = Number(active.min);
-        const maxX = Number(active.max);
-        const currentX = sRef.current;
-        
-        // Calculate progress based on current position
-        curveProgressRef.current = Math.max(0, Math.min(1, 
-          (currentX - minX) / Math.max(1e-6, maxX - minX)
-        ));
+        // progress based on cumulative arc length
+        const i = Math.max(0, Math.min(segIndexRef.current, active.points.length - 2));
+        const cumAtP0 = active.cumLen[i] || 0;
+        const segLen = Math.hypot(
+          active.points[i + 1].x - active.points[i].x,
+          active.points[i + 1].y - active.points[i].y
+        ) || 1e-6;
+        const s = Math.max(0, Math.min(segDistRef.current, segLen));
+        curveProgressRef.current = active.totalLen > 0
+          ? Math.max(0, Math.min(1, (cumAtP0 + s) / active.totalLen))
+          : 1;
       }
     }
   }, [paused]);
@@ -656,20 +694,14 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     const REQUIRED_STARS = 5;
     const result = [];
     let id = 0;
-    
-    // Real-world dimensions (1 unit = 1 cm)
+
     const starRadiusCm = 0.8; // Star radius in cm
     const starRadiusPx = starRadiusCm * SCALE_PX_PER_CM;
     const ballRadiusCm = 0.4; // Ball radius in cm
-    
-    // Minimum separation between stars (in pixels)
-    // Use 4x star radius to ensure good spacing
+
     const minDistancePx = 4 * starRadiusPx;
-    
-    // Safety margin from edges (3x star radius)
     const safetyMarginPx = 3 * starRadiusPx;
-    
-    // Define placement bounds in pixels (inset from edges)
+
     const bounds = {
       minX: safetyMarginPx,
       maxX: w - safetyMarginPx,
@@ -678,12 +710,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     };
 
     const isValidPosition = (x, y) => {
-      // Check bounds
       if (x < bounds.minX || x > bounds.maxX || y < bounds.minY || y > bounds.maxY) {
         return false;
       }
-      
-      // Check separation from other stars
       for (const star of result) {
         const dx = x - star.x;
         const dy = y - star.y;
@@ -692,24 +721,19 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
           return false;
         }
       }
-      
-      // Keep stars away from the horizontal center where ball typically starts
       const centerX = w / 2;
       const centerMargin = (starRadiusCm + ballRadiusCm) * 2 * SCALE_PX_PER_CM;
       if (Math.abs(x - centerX) < centerMargin) {
         return false;
       }
-      
       return true;
     };
 
     const generateStarPosition = () => {
-      // Grid-based attempt first for better distribution
       const gridSize = Math.floor(minDistancePx);
       const cols = Math.floor((bounds.maxX - bounds.minX) / gridSize);
       const rows = Math.floor((bounds.maxY - bounds.minY) / gridSize);
-      
-      // Try grid cells in random order
+
       const cells = [];
       for (let i = 0; i < cols; i++) {
         for (let j = 0; j < rows; j++) {
@@ -719,14 +743,10 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
           });
         }
       }
-      
-      // Shuffle cells
       for (let i = cells.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [cells[i], cells[j]] = [cells[j], cells[i]];
       }
-      
-      // Try cells with small random offset
       for (const cell of cells) {
         const offsetX = (Math.random() - 0.5) * gridSize * 0.8;
         const offsetY = (Math.random() - 0.5) * gridSize * 0.8;
@@ -736,8 +756,6 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
           return { x, y };
         }
       }
-      
-      // Fallback to pure random if grid fails
       const maxTries = 50;
       for (let i = 0; i < maxTries; i++) {
         const x = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
@@ -749,7 +767,6 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       return null;
     };
 
-    // Always generate exactly 5 stars
     while (result.length < REQUIRED_STARS) {
       const pos = generateStarPosition();
       if (pos) {
@@ -757,10 +774,9 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
           id: id++,
           x: pos.x,
           y: pos.y,
-          r: starRadiusPx * 0.4 // Visual radius for drawing (smaller than collision radius)
+          r: starRadiusPx * 0.4
         });
       } else {
-        // If we can't place a star, clear and try again with different random positions
         result.length = 0;
         id = 0;
       }
@@ -799,7 +815,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         />
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-        Tip: The ball now traverses the full visible curve from left edge to right edge for each equation.
+        Tip: The ball now follows the exact sampled path of each curve with uniform speed.
       </div>
     </div>
   );
