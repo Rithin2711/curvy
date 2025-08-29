@@ -436,7 +436,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     const drawBall = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
-      const ballRadiusPx = 0.6 * SCALE_PX_PER_CM; // 0.6cm radius = ~22.7px
+      const ballRadiusPx = 0.4 * SCALE_PX_PER_CM; // 0.4cm radius = ~15.1px
       ctx.save();
       ctx.shadowColor = '#7ee0ff';
       ctx.shadowBlur = ballRadiusPx;
@@ -536,7 +536,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     // Constants for physical dimensions
     const STAR_RADIUS_CM = 0.8; // Star radius in cm
-    const BALL_RADIUS_CM = 0.6; // Ball radius in cm
+    const BALL_RADIUS_CM = 0.4; // Ball radius in cm (reduced from 0.6)
 
     const checkAndCollectStars = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
@@ -632,51 +632,64 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   }, [paused]);
 
   // PUBLIC_INTERFACE
-  function generateStarsForCurves(w, h, curvesIn) {
+  function generateStarsForCurves(w, h) {
     /**
-     * Place stars along or slightly offset from the visible curves.
-     * Coordinates are in cm units, converted to pixels for display.
-     * Returns array of { id, x, y, r } in CANVAS coordinates.
+     * Generate stars with random placement across the game area while avoiding overlap
+     * Stars are placed within visible bounds and maintain minimum separation
+     * Returns array of { id, x, y, r } in CANVAS coordinates
      */
     const result = [];
     let id = 0;
-    const starOffsetCm = 2; // ~2cm offset from curve
-    const starRadiusCm = 0.8; // ~0.8cm radius = ~30px
+    const starRadiusCm = 0.8; // Star radius in cm
     const starRadiusPx = starRadiusCm * SCALE_PX_PER_CM;
-    const targetCount = 5;
-    const usableCurves = (curvesIn || []).filter(c => c.points && c.points.length > 10 && isFinite(c.min) && isFinite(c.max));
-    if (usableCurves.length === 0) return result;
+    const targetCount = 5; // Target number of stars to generate
+    const minDistancePx = 3 * starRadiusPx; // Minimum distance between stars
+    const safetyMarginPx = starRadiusPx * 2; // Prevent stars too close to edges
+    
+    // Define placement bounds in pixels (inset from edges)
+    const bounds = {
+      minX: safetyMarginPx,
+      maxX: w - safetyMarginPx,
+      minY: safetyMarginPx,
+      maxY: h - safetyMarginPx
+    };
 
-    const perCurve = Math.max(1, Math.ceil(targetCount / usableCurves.length));
-    usableCurves.forEach((c) => {
-      const n = Math.min(perCurve, Math.max(1, Math.floor(c.points.length / 40)));
-      for (let k = 1; k <= n; k++) {
-        const t = k / (n + 1);
-        const idx = Math.min(c.points.length - 1, Math.max(0, Math.floor(t * c.points.length)));
-        const p = c.points[idx];
-        const p0 = c.points[Math.max(0, idx - 1)];
-        const p1 = c.points[Math.min(c.points.length - 1, idx + 1)];
-        const dx = p1.px - p0.px;
-        const dy = p1.py - p0.py;
-        const len = Math.hypot(dx, dy) || 1;
-        const nx = -dy / len;
-        const ny = dx / len;
-        const dir = (k % 2 === 0) ? 1 : -1;
-        const offsetPx = starOffsetCm * SCALE_PX_PER_CM;
-        const cx = p.px + dir * offsetPx * nx;
-        const cy = p.py + dir * offsetPx * ny;
-        result.push({ id: id++, x: cx, y: cy, r: 12 });
+    const tryGeneratePosition = () => {
+      // Generate random position within bounds
+      const x = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
+      const y = bounds.minY + Math.random() * (bounds.maxY - bounds.minY);
+      
+      // Check if this position overlaps with any existing stars
+      for (const star of result) {
+        const dx = x - star.x;
+        const dy = y - star.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < minDistancePx) {
+          return null;
+        }
       }
-    });
+      
+      return { x, y };
+    };
 
-    while (result.length < targetCount && usableCurves[0]) {
-      const c = usableCurves[0];
-      const idx = Math.min(c.points.length - 1, Math.floor(Math.random() * c.points.length));
-      const p = c.points[idx];
-      result.push({ id: id++, x: p.px, y: p.py, r: 12 });
+    // Try to place all target stars with collision avoidance
+    let attempts = 0;
+    const maxAttempts = 100;
+    
+    while (result.length < targetCount && attempts < maxAttempts) {
+      const pos = tryGeneratePosition();
+      if (pos) {
+        result.push({ 
+          id: id++, 
+          x: pos.x, 
+          y: pos.y, 
+          r: starRadiusPx * 0.4 // Visual radius for drawing (smaller than collision radius)
+        });
+      }
+      attempts++;
     }
 
-    return result.slice(0, targetCount);
+    return result;
   }
 
   // Regenerate stars whenever curves or canvas size change
