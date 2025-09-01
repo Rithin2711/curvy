@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import './App.css';
 import EquationInput from './components/EquationInput';
+import CurveInput from './components/CurveInput';
 
 import GameCanvas from './components/GameCanvas';
 import Leaderboard from './components/Leaderboard';
@@ -40,7 +41,7 @@ function App() {
   const [plotReady, setPlotReady] = useState(false);
   const [startCoord, setStartCoord] = useState(null); // {x,y} in world units; displayed above canvas
   const [showInputUI, setShowInputUI] = useState(false); // controls visibility of equation inputs
-  const [plotButtonEnabled, setPlotButtonEnabled] = useState(false); // controls plot button state
+  const [plotButtonEnabled, setPlotButtonEnabled] = useState(true); // minimal flow: enabled by default
   const [gameStarted, setGameStarted] = useState(false); // controls if ball movement has started
 
   const api = useMemo(() => createApi(), []);
@@ -261,230 +262,40 @@ function App() {
                 alignItems: 'center',
               }}
             >
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <label htmlFor="username" style={{ fontSize: 14 }}>Username</label>
-                <input
-                  id="username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Enter your name"
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: 6,
-                    border: '1px solid var(--border-color)',
-                    background: 'var(--bg-primary)',
-                    color: 'var(--text-primary)',
+              {/* Minimal equation input always visible */}
+              <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
+                <CurveInput
+                  initialExpr={equations[0]?.expr || '0.5*x'}
+                  initialMin={equations[0]?.min ?? -200}
+                  initialMax={equations[0]?.max ?? 200}
+                  onSubmit={({ expr, min, max }) => {
+                    setEquations([{ id: 1, expr, color: '#61dafb', min, max }]);
+                    setPlotReady(true);
+                    setPaused(false); // start immediately after submit
+                    setGameStarted(true);
+                    setStatusMsg('Curve set. Ball is moving...');
+                    setResetSeed((s) => s + 1);
                   }}
                 />
+              </div>
+
+              {/* Minimal HUD: moves & stars and reset */}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 <button
+                  onClick={() => setPaused((p) => !p)}
                   className="btn"
-                  onClick={() => {
-                    api.ensureProfile(username).then(() => {
-                      setStatusMsg('Profile ready');
-                    }).catch(() => setStatusMsg('Profile error'));
-                  }}
+                  aria-pressed={paused}
                   style={{
-                    padding: '8px 12px',
-                    borderRadius: 6,
+                    padding: '10px 14px',
+                    borderRadius: 8,
                     border: 'none',
-                    background: 'var(--button-bg)',
-                    color: 'var(--button-text)',
+                    background: paused ? '#28a745' : '#ffc107',
+                    color: '#fff',
                     cursor: 'pointer',
                   }}
                 >
-                  Save Profile
+                  {paused ? 'Resume' : 'Pause'}
                 </button>
-              </div>
-
-              {/* Gate: initially show only a button to start plotting; inputs are hidden */}
-              {!showInputUI && !plotReady && (
-                <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                    Click below to start plotting a curve
-                  </div>
-                  <button
-                    onClick={() => {
-                      setShowInputUI(true);
-                      setStatusMsg('Enter an equation and domain, then click Plot to render the curve.');
-                      setPaused(true);
-                    }}
-                    style={{
-                      padding: '12px 16px',
-                      borderRadius: 8,
-                      border: 'none',
-                      background: '#0d6efd',
-                      color: '#fff',
-                      cursor: 'pointer',
-                      fontWeight: 700,
-                      width: 'fit-content'
-                    }}
-                    aria-label="Start plotting"
-                  >
-                    Start plotting
-                  </button>
-                </div>
-              )}
-
-              {/* Equation inputs only visible after user clicks "Start plotting" */}
-              {(showInputUI || plotReady) && (
-                <div className="equation-panel" style={{ display: 'grid', gap: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ fontWeight: 600 }}>Equation sequence (y = f(x))</div>
-                    <button
-                      onClick={addEquation}
-                      style={{
-                        padding: '8px 12px',
-                        borderRadius: 6,
-                        border: '1px solid var(--border-color)',
-                        background: 'transparent',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                      }}
-                      aria-label="Add equation"
-                    >
-                      + Add
-                    </button>
-                  </div>
-                  <div style={{ display: 'grid', gap: 8 }}>
-                    {equations.map((eq, idx) => (
-                      <div key={eq.id} style={{ display: 'grid', gap: 8 }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <div
-                            style={{
-                              width: 12,
-                              height: 12,
-                              borderRadius: 2,
-                              background: eq.color,
-                              border: '1px solid rgba(0,0,0,0.1)'
-                            }}
-                            aria-label={`Equation ${idx + 1} color`}
-                            title={eq.color}
-                          />
-                          <div style={{ fontWeight: 600, fontSize: 12 }}>
-                            #{idx + 1} {idx === activeIndex ? '(active)' : ''}
-                          </div>
-                          <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-                            <button
-                              onClick={() => moveEquation(idx, idx - 1)}
-                              disabled={idx === 0}
-                              style={{
-                                padding: '6px 10px',
-                                borderRadius: 6,
-                                border: '1px solid var(--border-color)',
-                                background: 'transparent',
-                                cursor: idx === 0 ? 'not-allowed' : 'pointer',
-                                fontSize: 12
-                              }}
-                              aria-label="Move up"
-                            >
-                              ↑
-                            </button>
-                            <button
-                              onClick={() => moveEquation(idx, idx + 1)}
-                              disabled={idx === equations.length - 1}
-                              style={{
-                                padding: '6px 10px',
-                                borderRadius: 6,
-                                border: '1px solid var(--border-color)',
-                                background: 'transparent',
-                                cursor: idx === equations.length - 1 ? 'not-allowed' : 'pointer',
-                                fontSize: 12
-                              }}
-                              aria-label="Move down"
-                            >
-                              ↓
-                            </button>
-                            <button
-                              onClick={() => removeEquation(eq.id)}
-                              disabled={equations.length <= 1}
-                              style={{
-                                padding: '6px 10px',
-                                borderRadius: 6,
-                                border: '1px solid var(--border-color)',
-                                background: 'transparent',
-                                cursor: equations.length <= 1 ? 'not-allowed' : 'pointer',
-                                fontSize: 12,
-                                color: '#dc3545'
-                              }}
-                              aria-label="Remove equation"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <EquationInput
-                            onApply={(payload) => applyEquationAt(idx, payload)}
-                            initialValue={eq.expr}
-                            initialMin={eq.min ?? -200}
-                            initialMax={eq.max ?? 200}
-                          />
-                        </div>
-                        <div style={{ height: 1, background: 'var(--border-color)' }} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {showInputUI && (
-                  <button
-                    onClick={onPlot}
-                    className="btn"
-                    style={{
-                      padding: '10px 14px',
-                      borderRadius: 8,
-                      border: 'none',
-                      background: '#0d6efd',
-                      color: '#fff',
-                      cursor: plotButtonEnabled ? 'pointer' : 'not-allowed',
-                      fontWeight: 600,
-                      opacity: plotReady ? 0.5 : 1,
-                    }}
-                    disabled={!plotButtonEnabled || plotReady}
-                  >
-                    Plot Curve(s)
-                  </button>
-                )}
-                {plotReady && !gameStarted && (
-                  <button
-                    onClick={() => {
-                      setGameStarted(true);
-                      setPaused(false);
-                      setStatusMsg('Game in progress! Ball is moving along the curve...');
-                    }}
-                    className="btn"
-                    style={{
-                      padding: '10px 14px',
-                      borderRadius: 8,
-                      border: 'none',
-                      background: '#28a745',
-                      color: '#fff',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Start
-                  </button>
-                )}
-                {plotReady && gameStarted && (
-                  <button
-                    onClick={onPauseToggle}
-                    className="btn"
-                    aria-pressed={paused}
-                    style={{
-                      padding: '10px 14px',
-                      borderRadius: 8,
-                      border: 'none',
-                      background: paused ? '#28a745' : '#ffc107',
-                      color: '#fff',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {paused ? 'Resume' : 'Pause'}
-                  </button>
-                )}
                 <button
                   onClick={onReset}
                   className="btn"
@@ -505,21 +316,12 @@ function App() {
                 </div>
               </div>
 
-              {/* Display chosen random start coordinate above the canvas */}
-              {plotReady && startCoord && (
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>
-                  Random starting coordinate: x = {Number(startCoord.x).toFixed(2)}
-                  {isFinite(startCoord.y) ? `, y = ${Number(startCoord.y).toFixed(2)}` : ' (y computed from curve)'}
-                </div>
-              )}
-
               <div
                 className="panels"
                 style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}
               >
                 <GameCanvas
                   key={resetSeed}
-                  // When not plotReady, pass empty expressions so canvas shows only ball + stars
                   expressions={plotReady ? orderedExpressions : []}
                   paused={paused || !plotReady}
                   onStarStats={onStarStats}
@@ -527,15 +329,12 @@ function App() {
                   onCurveFinished={onCurveFinished}
                   startCoord={plotReady ? startCoord : null}
                   onStartEvaluated={(pt) => {
-                    // Store evaluated y for display
                     if (pt && isFinite(pt.x) && isFinite(pt.y)) {
                       setStartCoord({ x: pt.x, y: pt.y });
                     }
                   }}
+                  minimalMode={true}
                 />
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  Sequencing mode: the ball follows each equation in order. When a path ends, it automatically continues to the next. Stops after the last curve.
-                </div>
               </div>
               <div aria-live="polite" style={{ minHeight: 22, color: 'var(--text-secondary)' }}>
                 {statusMsg}
@@ -575,7 +374,7 @@ function App() {
                     </div>
                     {!endResult.success && (
                       <div style={{ color: '#dc3545', fontSize: 13, marginBottom: 12 }}>
-                        You missed some stars. Try adjusting your equations and attempt again.
+                        You missed some stars. Try again with another curve.
                       </div>
                     )}
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -617,7 +416,8 @@ function App() {
               )}
             </div>
 
-            <Leaderboard items={leaderboard} />
+            {/* Keep leaderboard if desired, but it's not required by this subtask */}
+            {/* <Leaderboard items={leaderboard} /> */}
           </div>
         </div>
       </header>
