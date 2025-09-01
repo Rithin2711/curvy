@@ -105,7 +105,7 @@ export default function CurveInput({ initialExpr = '0.5*x', initialMin = -200, i
             fontWeight: 600,
           }}
         >
-          Plot & Start
+          Plot
         </button>
       </div>
       {error && (

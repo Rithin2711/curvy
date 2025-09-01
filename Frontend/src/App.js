@@ -269,11 +269,13 @@ function App() {
                   initialMin={equations[0]?.min ?? -200}
                   initialMax={equations[0]?.max ?? 200}
                   onSubmit={({ expr, min, max }) => {
+                    // Update the equation and prepare plot, but keep ball stationary (paused)
                     setEquations([{ id: 1, expr, color: '#61dafb', min, max }]);
                     setPlotReady(true);
-                    setPaused(false); // start immediately after submit
-                    setGameStarted(true);
-                    setStatusMsg('Curve set. Ball is moving...');
+                    setPaused(true); // keep stationary until user presses Start/Resume
+                    setGameStarted(false);
+                    setStatusMsg('Curve set. Click Start to begin.');
+                    // reset/reseed canvas so the ball position updates to the curve start but remains stationary
                     setResetSeed((s) => s + 1);
                   }}
                 />
