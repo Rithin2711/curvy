@@ -10,6 +10,7 @@ export function createApi() {
    *
    * Note: Ensure orchestrator sets .env with REACT_APP_BACKEND_URL for deployment.
    */
+  // IMPORTANT: Request the orchestrator to set REACT_APP_BACKEND_URL in .env file for deployments.
   const baseURL = process.env.REACT_APP_BACKEND_URL || '';
 
   const client = axios.create({

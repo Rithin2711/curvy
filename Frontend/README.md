@@ -26,11 +26,12 @@ This is the complete React-based client for Gravity Curve. It includes:
 
 ## Gameplay
 
-- Enter an equation y = f(x) (examples: `0.5*x`, `(x^2)/120`, `40*sin(x/20)`, `0.002*x^3 - 0.3*x`).
-- Set a domain [min, max] for each equation segment. Multiple equations are followed in sequence from left to right over the visible domain.
+- Enter one or more equations y = f(x) (examples: `0.5*x`, `(x^2)/120`, `40*sin(x/20)`, `0.002*x^3 - 0.3*x`).
+- Set a domain [min, max] for each equation segment. Multiple equations are followed in sequence from left to right.
+- Click “Start plotting” to open inputs, then “Plot Curve(s)” to render and pick a random start x within the first domain.
 - Use Start/Resume to move the ball, Pause to adjust equations, Reset to start over.
 - Collect all stars to complete the level. Your moves count increments when changing equations during play.
-- Submit your score automatically when all stars are collected; leaderboard updates from the backend.
+- When all stars are collected or sequence ends, a modal shows the result and score is submitted if successful.
 
 ## Environment Variables
 
@@ -43,6 +44,16 @@ The frontend uses this to call the backend:
 - POST `/api/scores` to submit a score
 - GET `/api/leaderboard` to fetch leaderboard
 
+Note: The orchestrator should provision `.env` in CI. Do not commit real secrets.
+
+## API Integration
+
+- Configure the backend base URL via `REACT_APP_BACKEND_URL`.
+- API module `src/services/api.js` exposes:
+  - `ensureProfile(username)` — creates/updates a profile
+  - `submitScore({ username, score, moves })` — persists scores
+  - `getLeaderboard()` — fetches leaderboard data
+
 ## Tech
 
 - React 18
@@ -54,5 +65,6 @@ The frontend uses this to call the backend:
 
 - Public facing functions/components are documented and marked with PUBLIC_INTERFACE comments in source files.
 - The canvas renders axes, curves, ball, moving path trace with fade, and stars with small animations.
-- The ball traverses the full displayed domain for each curve to avoid premature stops.
+- The ball follows the discrete sampled polyline for each equation with uniform arc-length speed.
+- UI is responsive and includes a theme toggle.
 
