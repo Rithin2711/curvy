@@ -11,8 +11,8 @@ export default function GraphPlot({ expression, width = 800, height = 260 }) {
    * Domain and range are scaled to match the main game canvas.
    */
   
-  // Scale constant: 1 unit (1 cm) = 28 pixels (reduced to compact the graph)
-  const SCALE_PX_PER_CM = 28;
+  // Scale constant: 1 unit (1 cm) = 20 pixels (further reduced to compact the graph)
+  const SCALE_PX_PER_CM = 20;
   const canvasRef = useRef(null);
 
   const compiled = useMemo(() => {
