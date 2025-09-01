@@ -46,7 +46,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // Pointer along the active curve's sampled polyline: segment index and distance along that segment
   const segIndexRef = useRef(0);   // integer index of current segment start point
   const segDistRef = useRef(0);    // distance progressed along current segment (in cm)
-  const speedWorldPerSecRef = useRef(40); // 40 cm/sec for smooth animation
+  const speedWorldPerSecRef = useRef(40); // 40 cm/sec for smooth animation (arc-length speed)
   const curveProgressRef = useRef(0);     // 0..1 progress along active curve
   const animationRef = useRef(0);
   const lastTsRef = useRef(0);
@@ -150,7 +150,8 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       });
     });
 
-    // Initialize starting state
+    // Initialize starting state: begin at left-most (min x) of the first valid curve,
+    // or at provided startCoord.x if it lies within the first curve's [min,max].
     const first = allCurves.find((c) => c.compiled && c.points.length > 0 && isFinite(c.min) && isFinite(c.max));
     let startX = 0, startY = 0;
 
@@ -166,6 +167,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     }
 
     if (first) {
+      // Always start from the minimum visible domain unless a valid startCoord.x is provided within [min,max]
       let sx = first.min;
       if (startCoord && isFinite(startCoord.x) && startCoord.x >= first.min && startCoord.x <= first.max) {
         sx = Number(startCoord.x);
@@ -328,9 +330,11 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
       const next = findNextCurveAfter(active.orderIndex ?? 0);
       if (next) {
-        // Start of next curve: position at its first sampled point
+        // Start at left-most point (min x) of the next curve to ensure full traversal from min->max
         activeCurveIdRef.current = next.id;
         activeOrderIndexRef.current = next.orderIndex ?? 0;
+
+        // Find the first point (already sampled left-to-right)
         segIndexRef.current = 0;
         segDistRef.current = 0;
         curveProgressRef.current = 0;
@@ -815,7 +819,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         />
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-        Tip: The ball now follows the exact sampled path of each curve with uniform speed.
+        Tip: The ball traverses each curve from min x to max x with uniform arc-length speed and continues to the next.
       </div>
     </div>
   );
