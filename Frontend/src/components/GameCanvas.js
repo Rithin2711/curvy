@@ -51,6 +51,13 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   const animationRef = useRef(0);
   const lastTsRef = useRef(0);
 
+  // Travel direction along the polyline segments:
+  // +1 means forward (increasing point index), -1 means backward (decreasing point index)
+  const directionRef = useRef(1);
+
+  // Mode for end handling: 'pingpong' (default) or 'wrap'
+  const traversalModeRef = useRef('pingpong');
+
   // Stars data (canvas coordinates)
   const starsRef = useRef([]);
   const collectedRef = useRef([]);
@@ -184,6 +191,10 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
       segDistRef.current = 0; // start exactly at sampled point
       curveProgressRef.current = first.totalLen > 0 ? (first.cumLen[segIndexRef.current] / first.totalLen) : 0;
       isIdleAtEndRef.current = false;
+
+      // Determine initial direction: if we start closer to the right end, go left first
+      const iMid = Math.floor((first.points.length - 1) / 2);
+      directionRef.current = snap.i > iMid ? -1 : 1;
     } else {
       activeCurveIdRef.current = null;
       activeOrderIndexRef.current = 0;
@@ -273,6 +284,21 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   }
 
   // Interpolate along sampled points with uniform arc-length speed
+  function getPositionOnSegment(active, i, distOnSeg) {
+    const safeI = Math.max(0, Math.min(i, active.points.length - 2));
+    const p0 = active.points[safeI];
+    const p1 = active.points[safeI + 1];
+    const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1e-6;
+    const t = Math.max(0, Math.min(1, distOnSeg / segLen));
+    return {
+      x: p0.x + (p1.x - p0.x) * t,
+      y: p0.y + (p1.y - p0.y) * t,
+      segLen,
+      safeI
+    };
+  }
+
+  // Interpolate along sampled points with uniform arc-length speed and continuous end handling
   function advanceAlongPolyline(dt) {
     if (isIdleAtEndRef.current) return { ...state };
     const active = getActiveCurve();
@@ -280,92 +306,112 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     // If paused, stick to current interpolated position on active segment
     if (paused) {
-      const i = Math.max(0, Math.min(segIndexRef.current, active.points.length - 2));
-      const p0 = active.points[i];
-      const p1 = active.points[i + 1];
-      const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1e-6;
-      const t = Math.max(0, Math.min(1, segDistRef.current / segLen));
-      const x = p0.x + (p1.x - p0.x) * t;
-      const y = p0.y + (p1.y - p0.y) * t;
-      return { x, y };
+      const pos = getPositionOnSegment(active, segIndexRef.current, segDistRef.current);
+      return { x: pos.x, y: pos.y };
     }
 
     let i = Math.max(0, Math.min(segIndexRef.current, active.points.length - 2));
     let distOnSeg = segDistRef.current;
     let remaining = speedWorldPerSecRef.current * dt;
+    let dir = directionRef.current;
 
-    while (remaining > 0 && i < active.points.length - 1) {
+    const stepForward = () => { i += 1; distOnSeg = 0; };
+    const stepBackward = () => {
+      // When going backward, segments are (i-1 -> i), our "current" start is at points[i-1]
+      i -= 1;
+      // Set distance from new segment start: full length minus zero (start at end)
+      if (i >= 0) {
+        const p0b = active.points[i];
+        const p1b = active.points[i + 1];
+        distOnSeg = Math.hypot(p1b.x - p0b.x, p1b.y - p0b.y);
+      } else {
+        distOnSeg = 0;
+      }
+    };
+
+    while (remaining > 0) {
+      // If we are out of bounds w.r.t segments, handle end behavior
+      if (dir > 0 && i >= active.points.length - 1) {
+        // Hit the last point
+        if (traversalModeRef.current === 'wrap') {
+          // Wrap to beginning
+          i = 0;
+          distOnSeg = 0;
+        } else {
+          // Ping-pong: reverse
+          dir = -1;
+          directionRef.current = -1;
+          // Position is currently beyond last segment; step to previous segment for backward travel
+          i = active.points.length - 2;
+          distOnSeg = Math.hypot(
+            active.points[i + 1].x - active.points[i].x,
+            active.points[i + 1].y - active.points[i].y
+          );
+        }
+      } else if (dir < 0 && i <= 0 && distOnSeg <= 0) {
+        // Hit the first point when moving backwards
+        if (traversalModeRef.current === 'wrap') {
+          // Wrap to end: place at last segment start with zero distance
+          i = active.points.length - 2;
+          distOnSeg = 0;
+        } else {
+          // Ping-pong: reverse to forward at the beginning
+          dir = 1;
+          directionRef.current = 1;
+          i = 0;
+          distOnSeg = 0;
+        }
+      }
+
+      // Clamp i to valid range for segment computation
+      i = Math.max(0, Math.min(i, active.points.length - 2));
+
+      // Current segment info
       const p0 = active.points[i];
       const p1 = active.points[i + 1];
       const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
 
-      // If degenerate or zero-length, skip to next segment
       if (segLen <= 1e-9) {
-        i += 1;
-        distOnSeg = 0;
+        // Degenerate; step in current direction
+        if (dir > 0) stepForward();
+        else stepBackward();
         continue;
       }
 
-      const segLeft = segLen - distOnSeg;
-      if (remaining < segLeft) {
-        // Advance inside this segment
-        distOnSeg += remaining;
-        remaining = 0;
+      if (dir > 0) {
+        const segLeft = segLen - distOnSeg;
+        if (remaining < segLeft) {
+          distOnSeg += remaining;
+          remaining = 0;
+        } else {
+          remaining -= segLeft;
+          stepForward();
+        }
       } else {
-        // Move to next segment
-        remaining -= segLeft;
-        i += 1;
-        distOnSeg = 0;
+        // Moving backwards: reduce distOnSeg; when <=0, move to previous segment
+        if (remaining < distOnSeg) {
+          distOnSeg -= remaining;
+          remaining = 0;
+        } else {
+          remaining -= distOnSeg;
+          // Move to previous segment and set dist to its full length (we are at its end)
+          stepBackward();
+        }
       }
     }
 
-    // If we reached the end of the points for this curve, snap to end and prepare next curve
-    if (i >= active.points.length - 1) {
-      const endPt = active.points[active.points.length - 1];
-      // Push final point to path
-      const lastPath = pathRef.current[pathRef.current.length - 1];
-      if (!lastPath || lastPath.x !== endPt.x || lastPath.y !== endPt.y) {
-        pathRef.current.push({ x: endPt.x, y: endPt.y, t: performance.now() });
-      }
+    // Persist
+    segIndexRef.current = Math.max(0, Math.min(i, active.points.length - 2));
+    segDistRef.current = Math.max(0, segDistRef.current = distOnSeg);
 
-      const next = findNextCurveAfter(active.orderIndex ?? 0);
-      if (next) {
-        // Start at left-most point (min x) of the next curve to ensure full traversal from min->max
-        activeCurveIdRef.current = next.id;
-        activeOrderIndexRef.current = next.orderIndex ?? 0;
+    // Compute exact current position
+    const pos = getPositionOnSegment(active, segIndexRef.current, segDistRef.current);
+    const x = pos.x, y = pos.y;
 
-        // Find the first point (already sampled left-to-right)
-        segIndexRef.current = 0;
-        segDistRef.current = 0;
-        curveProgressRef.current = 0;
-        isIdleAtEndRef.current = false;
-
-        onCurveFinished && onCurveFinished((next.orderIndex ?? 0));
-        const np0 = next.points[0];
-        return { x: np0.x, y: np0.y };
-      } else {
-        // No more curves
-        isIdleAtEndRef.current = true;
-        onCurveFinished && onCurveFinished((active.orderIndex ?? 0) + 1);
-        return { x: endPt.x, y: endPt.y };
-      }
-    }
-
-    // Compute interpolated position on current segment
-    segIndexRef.current = i;
-    segDistRef.current = distOnSeg;
-
-    const p0 = active.points[i];
-    const p1 = active.points[i + 1];
-    const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1e-6;
-    const t = Math.max(0, Math.min(1, distOnSeg / segLen));
-    const x = p0.x + (p1.x - p0.x) * t;
-    const y = p0.y + (p1.y - p0.y) * t;
-
-    // Update curve progress based on arc-length proportion
+    // Update curve progress based on arc-length proportion from start to current point (normalized 0..1)
     if (active.totalLen > 0) {
-      const cumAtP0 = active.cumLen[i];
-      curveProgressRef.current = Math.max(0, Math.min(1, (cumAtP0 + distOnSeg) / active.totalLen));
+      const cumAtP0 = active.cumLen[pos.safeI];
+      curveProgressRef.current = Math.max(0, Math.min(1, (cumAtP0 + (segDistRef.current || 0)) / active.totalLen));
     } else {
       curveProgressRef.current = 1;
     }
@@ -819,7 +865,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
         />
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-        Tip: The ball traverses each curve from min x to max x with uniform arc-length speed and continues to the next.
+        Tip: The ball continuously moves along each curve with uniform arc-length speed; at the ends it reverses (ping-pong) for seamless traversal.
       </div>
     </div>
   );
