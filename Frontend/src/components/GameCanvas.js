@@ -36,8 +36,8 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
   // Current world state of ball (world units: x and y are in cm)
   const [state, setState] = useState({ x: 0, y: 0 });
 
-  // Scale constant: 1 unit (1 cm) = 37.8 pixels
-  const SCALE_PX_PER_CM = 37.8;
+  // Scale constant: 1 unit (1 cm) = 28 pixels (reduced to make visuals more compact)
+  const SCALE_PX_PER_CM = 28;
 
   // Animation state refs
   const activeCurveIdRef = useRef(null);
@@ -477,7 +477,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
 
     const drawBall = (x, y) => {
       const { px, py } = worldToCanvas(w, h, x, y);
-      const ballRadiusPx = 0.6 * SCALE_PX_PER_CM; // 0.6cm radius
+      const ballRadiusPx = 0.4 * SCALE_PX_PER_CM; // 0.4cm radius
       ctx.save();
       ctx.shadowColor = '#7ee0ff';
       ctx.shadowBlur = ballRadiusPx;
@@ -553,7 +553,7 @@ export default function GameCanvas({ expressions = [], paused, onStarStats, onCo
     };
 
     const STAR_RADIUS_CM = 0.8;
-    const BALL_RADIUS_CM = 0.6;
+    const BALL_RADIUS_CM = 0.4;
 
     const drawStars = (nowTs) => {
       starsRef.current.forEach((s, i) => {
