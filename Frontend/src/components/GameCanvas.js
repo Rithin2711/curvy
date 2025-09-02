@@ -203,7 +203,9 @@ export default function GameCanvas({
     }
 
     setCurves(allCurves);
-    setState({ x: startX, y: startY });
+    // Force stationary initial position to the first valid point for determinism
+    const stationary = first && first.points.length > 0 ? { x: first.points[0].x, y: first.points[0].y } : { x: startX, y: startY };
+    setState(stationary);
 
     if (typeof onStartEvaluated === 'function') {
       try {
@@ -295,99 +297,19 @@ export default function GameCanvas({
 
   // Interpolate along sampled points with uniform arc-length speed and end-stop handling
   function advanceAlongPolyline(dt) {
-    if (isIdleAtEndRef.current) return { ...state };
+    /**
+     * Stationary mode:
+     * Force the ball to remain fixed at its initial evaluated position.
+     * We bypass any velocity/segment advancement and always return the current state.
+     */
     const active = getActiveCurve();
-    if (!active) return { ...state };
-
-    // If paused, stick to current interpolated position on active segment
-    if (paused) {
-      const pos = getPositionOnSegment(active, segIndexRef.current, segDistRef.current);
-      return { x: pos.x, y: pos.y };
+    if (active && active.points.length > 0) {
+      // Keep the ball at the first sampled point of the active curve
+      const p0 = active.points[0];
+      return { x: p0.x, y: p0.y };
     }
-
-    let i = Math.max(0, Math.min(segIndexRef.current, active.points.length - 2));
-    let distOnSeg = segDistRef.current;
-    let remaining = speedWorldPerSecRef.current * dt;
-
-    // Only forward travel is allowed
-    const stepForward = () => { i += 1; distOnSeg = 0; };
-
-    while (remaining > 0) {
-      // If we are at or beyond the last segment end, handle end-of-curve
-      if (i >= active.points.length - 1) {
-        // Stop at endpoint of current curve
-        const endPt = active.points[active.points.length - 1];
-        segIndexRef.current = Math.max(0, active.points.length - 2);
-        segDistRef.current = Math.hypot(
-          active.points[active.points.length - 1].x - active.points[active.points.length - 2].x,
-          active.points[active.points.length - 1].y - active.points[active.points.length - 2].y
-        );
-
-        // Try to advance to next curve if any; otherwise stop permanently
-        const next = findNextCurveAfter(active.orderIndex ?? 0);
-        if (next) {
-          // Switch to next curve at its min x (first sampled point)
-          activeCurveIdRef.current = next.id;
-          activeOrderIndexRef.current = next.orderIndex ?? (active.orderIndex ?? 0) + 1;
-          i = 0;
-          distOnSeg = 0;
-          // Inform parent which index to set active (for UI); compute index in original expressions order
-          if (typeof onCurveFinished === 'function') {
-            const ordered = [...curves].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
-            const nextIndexInSeq = ordered.findIndex(c => c.id === next.id);
-            try { onCurveFinished(nextIndexInSeq); } catch {}
-          }
-          // Continue advancing along new curve in the same frame if remaining > 0
-          continue;
-        } else {
-          // Final end reached; mark idle and keep the ball at the endpoint
-          isIdleAtEndRef.current = true;
-          const posEnd = active.points[active.points.length - 1];
-          return { x: posEnd.x, y: posEnd.y };
-        }
-      }
-
-      // Clamp i to valid range for segment computation
-      i = Math.max(0, Math.min(i, active.points.length - 2));
-
-      // Current segment info
-      const p0 = active.points[i];
-      const p1 = active.points[i + 1];
-      const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-
-      if (segLen <= 1e-9) {
-        // Degenerate; step forward
-        stepForward();
-        continue;
-      }
-
-      const segLeft = segLen - distOnSeg;
-      if (remaining < segLeft) {
-        distOnSeg += remaining;
-        remaining = 0;
-      } else {
-        remaining -= segLeft;
-        stepForward();
-      }
-    }
-
-    // Persist
-    segIndexRef.current = Math.max(0, Math.min(i, active.points.length - 2));
-    segDistRef.current = Math.max(0, segDistRef.current = distOnSeg);
-
-    // Compute exact current position
-    const pos = getPositionOnSegment(active, segIndexRef.current, segDistRef.current);
-    const x = pos.x, y = pos.y;
-
-    // Update curve progress based on arc-length proportion from start to current point (normalized 0..1)
-    if (active.totalLen > 0) {
-      const cumAtP0 = active.cumLen[pos.safeI];
-      curveProgressRef.current = Math.max(0, Math.min(1, (cumAtP0 + (segDistRef.current || 0)) / active.totalLen));
-    } else {
-      curveProgressRef.current = 1;
-    }
-
-    return { x, y };
+    // If no active curve, keep whatever state was set (typically origin)
+    return { ...state };
   }
 
   // Render loop
@@ -655,10 +577,11 @@ export default function GameCanvas({
       drawBall(next.x, next.y);
       drawLegend();
 
-      // Collision check using precise polyline-following position
-      if (Math.hypot(next.x - prev.x, next.y - prev.y) > 0.01) {
-        checkAndCollectStars(next.x, next.y);
-      }
+      // Collision check disabled in stationary mode to avoid collecting stars without movement
+      // (kept for future re-enable if movement returns)
+      // if (Math.hypot(next.x - prev.x, next.y - prev.y) > 0.01) {
+      //   checkAndCollectStars(next.x, next.y);
+      // }
 
       if (isIdleAtEndRef.current) {
         const total = (collectedRef.current || []).length;
@@ -676,23 +599,9 @@ export default function GameCanvas({
 
   // Reset animation timing and compute progress when resuming
   useEffect(() => {
+    // In stationary mode, pause/resume has no effect on position or progress.
     lastTsRef.current = 0;
-    if (!paused) {
-      const active = getActiveCurve();
-      if (active) {
-        // progress based on cumulative arc length
-        const i = Math.max(0, Math.min(segIndexRef.current, active.points.length - 2));
-        const cumAtP0 = active.cumLen[i] || 0;
-        const segLen = Math.hypot(
-          active.points[i + 1].x - active.points[i].x,
-          active.points[i + 1].y - active.points[i].y
-        ) || 1e-6;
-        const s = Math.max(0, Math.min(segDistRef.current, segLen));
-        curveProgressRef.current = active.totalLen > 0
-          ? Math.max(0, Math.min(1, (cumAtP0 + s) / active.totalLen))
-          : 1;
-      }
-    }
+    curveProgressRef.current = 0;
   }, [paused]);
 
   // PUBLIC_INTERFACE
