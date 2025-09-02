@@ -75,10 +75,11 @@ export default function GameCanvas({
   const traversalModeRef = useRef('stop');
 
   // Stars data (canvas coordinates)
+  // Stars should be generated once and remain fixed throughout gameplay.
   const starsRef = useRef([]);
   const collectedRef = useRef([]);
 
-  // Small pop animation state
+  // Small pop animation state (kept for rendering visuals only; no movement)
   const starAnimRef = useRef({ phases: new Map() });
 
   // Path trace buffer (world coordinates with timestamps)
@@ -104,7 +105,7 @@ export default function GameCanvas({
     return () => ro.disconnect();
   }, []);
 
-  // Build curves from expressions and reset state on change
+  // Build curves from expressions and reset state on change (ball path only)
   useEffect(() => {
     const w = dimensions.w;
     const h = dimensions.h;
@@ -215,11 +216,15 @@ export default function GameCanvas({
 
     // Reset trace buffer
     pathRef.current = [{ x: startX, y: startY, t: performance.now() }];
-    // Reset star collection state but keep positions
+
+    // IMPORTANT: Do NOT reposition or regenerate stars here.
+    // Stars remain at their initially assigned canvas coordinates.
+    // Only reset collection flags if needed but preserve positions.
     if (starsRef.current.length > 0) {
       collectedRef.current = starsRef.current.map(() => false);
       onStarStats && onStarStats({ collected: 0, total: starsRef.current.length });
     }
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compiledList, dimensions.w, dimensions.h, expressions, startCoord]);
 
@@ -299,16 +304,14 @@ export default function GameCanvas({
   function advanceAlongPolyline(dt) {
     /**
      * Stationary mode:
-     * Force the ball to remain fixed at its initial evaluated position.
-     * We bypass any velocity/segment advancement and always return the current state.
+     * The ball remains fixed at its initial evaluated position.
+     * Stars are static; no movement is applied.
      */
     const active = getActiveCurve();
     if (active && active.points.length > 0) {
-      // Keep the ball at the first sampled point of the active curve
       const p0 = active.points[0];
       return { x: p0.x, y: p0.y };
     }
-    // If no active curve, keep whatever state was set (typically origin)
     return { ...state };
   }
 
@@ -577,8 +580,8 @@ export default function GameCanvas({
       drawBall(next.x, next.y);
       drawLegend();
 
-      // Collision check disabled in stationary mode to avoid collecting stars without movement
-      // (kept for future re-enable if movement returns)
+      // Stars remain static. Collision/collection is disabled in stationary mode.
+      // If movement is reintroduced in future, re-enable collision checks below:
       // if (Math.hypot(next.x - prev.x, next.y - prev.y) > 0.01) {
       //   checkAndCollectStars(next.x, next.y);
       // }
@@ -705,50 +708,27 @@ export default function GameCanvas({
     return result;
   }
 
-  // Generate stars on mount/resize or when curve changes.
-  // If there is a valid active curve with sampled points, place stars on/near that path.
+  // Generate stars ONCE on initial mount or when canvas size first becomes available.
+  // They remain fixed at their initial positions; no updates on curve/resize changes.
   useEffect(() => {
-    const w = dimensions.w, h = dimensions.h;
-
-    const active = curves.find(c => c.id === activeCurveIdRef.current) || curves.find(c => c.points.length > 1);
-    let stars = [];
-
-    if (active && active.points.length > 1) {
-      // Place 5 stars along the curve at roughly equal arc-length intervals
-      const REQUIRED = 5;
-      stars = [];
-      const total = active.totalLen || 0;
-      for (let k = 1; k <= REQUIRED; k++) {
-        const targetLen = (k / (REQUIRED + 1)) * total;
-        // find segment containing targetLen
-        let idx = 0;
-        while (idx < active.cumLen.length - 1 && active.cumLen[idx] < targetLen) idx++;
-        idx = Math.max(1, Math.min(idx, active.cumLen.length - 1));
-        const leftLen = active.cumLen[idx - 1];
-        const segLen = active.cumLen[idx] - leftLen || 1e-6;
-        const t = Math.max(0, Math.min(1, (targetLen - leftLen) / segLen));
-        const p0 = active.points[idx - 1];
-        const p1 = active.points[idx];
-        const wx = p0.x + (p1.x - p0.x) * t;
-        const wy = p0.y + (p1.y - p0.y) * t;
-        const { px, py } = worldToCanvas(w, h, wx, wy);
-        stars.push({
-          id: k - 1,
-          x: px,
-          y: py,
-          r: 0.8 * SCALE_PX_PER_CM * 0.4,
-        });
-      }
-    } else {
-      // fallback: random stars within bounds
-      stars = generateStarsForCurves(w, h);
+    // If stars already exist, do nothing to keep them stationary.
+    if (starsRef.current && starsRef.current.length > 0) {
+      return;
     }
 
+    const w = dimensions.w, h = dimensions.h;
+
+    // Use the existing generator to create fixed star positions.
+    const stars = generateStarsForCurves(w, h);
+
+    // Assign and initialize collection flags.
     starsRef.current = stars;
     collectedRef.current = stars.map(() => false);
+
+    // Inform HUD.
     onStarStats && onStarStats({ collected: 0, total: stars.length });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dimensions.w, dimensions.h, curves]);
+  }, [dimensions.w, dimensions.h]);
 
   // Initial star stats on mount
   useEffect(() => {
